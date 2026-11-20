@@ -238,6 +238,17 @@ if [ -f "$ROOT/tests/unit/run_unit_p4.gd" ]; then
   check "UNIT-P4 runner exit code 0 ($P4_PASS assertions passed, $P4_FAIL failed)" "[ $P4_CODE -eq 0 ]"
 fi
 
+# ── Phase 4 CLI integration: --export-leaderboard & soak_cmd ─────────
+"$GODOT" --headless --path "$ROOT_WIN" -- --export-leaderboard "$OUT_WIN/t_lb_export.json" >/dev/null 2>&1
+LB_CODE=$?
+check "P4-CLI --export-leaderboard exits 0" "[ $LB_CODE -eq 0 ]"
+check "P4-CLI --export-leaderboard writes {\"entries\":...}" 'grep -q "\"entries\"" "$OUT/t_lb_export.json"'
+
+"$GODOT" --headless --path "$ROOT_WIN" --script res://src/soak.gd -- --seed 7 --nights 2 --out "$OUT_WIN/t_soak2.json" >/dev/null 2>&1
+SOAK_CODE=$?
+check "P4-CLI soak_cmd 2-night smoke exits 0" "[ $SOAK_CODE -eq 0 ]"
+check "P4-CLI soak_cmd crashes=0" 'grep -q "\"crashes\": 0" "$OUT/t_soak2.json"'
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ] && exit 0 || exit 1

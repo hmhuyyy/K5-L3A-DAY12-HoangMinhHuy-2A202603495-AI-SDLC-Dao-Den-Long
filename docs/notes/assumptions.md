@@ -263,3 +263,12 @@ Tick tối đa per night: Đêm 1 = 18.000, Đêm 2 = 19.800, Đêm 3 = 21.600 (
 | ID | Vấn đề | Tác động |
 |---|---|---|
 | **OPEN-B15** | Tập điểm sương cho drifter spawn chưa định nghĩa; WorldDefs phải cung cấp `mist_spawn_points` riêng | Vị trí drifter lúc sinh deterministic |
+
+---
+
+## ── PHASE 3 & PHASE 4 (Contract v1.2 → v1.3) ──
+
+Toàn bộ quyết định kiến trúc của Phase 3 ("Đèn Cạn Dầu", Contract v1.2) và Phase 4 ("Bình Minh · Release v1.0.0", Contract v1.3) được ghi chi tiết tại:
+- [docs/adr/ADR-003-lantern-fuel-and-dawn-survival.md](../adr/ADR-003-lantern-fuel-and-dawn-survival.md)
+- [docs/adr/ADR-004-bench-soak-leaderboard.md](../adr/ADR-004-bench-soak-leaderboard.md)
+- [docs/notes/test-migration.md](test-migration.md)

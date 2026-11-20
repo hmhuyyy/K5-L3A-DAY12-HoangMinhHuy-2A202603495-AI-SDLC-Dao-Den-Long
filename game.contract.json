@@ -1,9 +1,11 @@
 {
-  "contract_version": "1.2",
+  "contract_version": "1.3",
   "team": "2A202603495-HoangMinhHuy",
   "build_cmd": "echo 'No build step required; Godot 4.7 runs from source.'",
   "run_cmd": "godot --path .",
   "headless_cmd": "godot --headless --path . --script res://src/headless.gd --",
+  "bench_cmd": "godot --path . --script res://src/bench.gd --",
+  "soak_cmd": "godot --headless --path . --script res://src/soak.gd --",
   "tuning": {
     "player_speed": 6.0,
     "player_accel_s": 0.1,

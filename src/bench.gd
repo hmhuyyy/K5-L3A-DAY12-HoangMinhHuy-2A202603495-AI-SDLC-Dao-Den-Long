@@ -206,7 +206,6 @@ func _process(delta: float) -> bool:
 	if not _first_frame_done:
 		_first_frame_done = true
 		_load_ms = Time.get_ticks_msec()
-		_peak_mem_mb = maxf(_peak_mem_mb, ProcMem.peak_mb())
 		return false
 
 	_elapsed_s += delta
@@ -226,10 +225,6 @@ func _process(delta: float) -> bool:
 	if _elapsed_s > WARMUP_S:
 		_dts_ms.append(delta * 1000.0)
 		_measure_s += delta
-		_mem_sample_accum += delta
-		if _mem_sample_accum >= 2.0:
-			_mem_sample_accum = 0.0
-			_peak_mem_mb = maxf(_peak_mem_mb, ProcMem.peak_mb())
 		if _measure_s >= _duration_s:
 			_finish_bench()
 			return true
@@ -237,7 +232,7 @@ func _process(delta: float) -> bool:
 
 func _finish_bench() -> void:
 	_peak_mem_mb = maxf(_peak_mem_mb, ProcMem.peak_mb())
-	var stats := BenchStats.compute(_dts_ms)
+	var stats: Dictionary = BenchStats.compute(_dts_ms)
 	var ver_info := Engine.get_version_info()
 	var godot_ver := str(ver_info.get("string", "4.7.2"))
 	var r_method := str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "gl_compatibility"))
