@@ -5,7 +5,7 @@ extends SceneTree
 
 func _init() -> void:
 	var args := _parse_args(OS.get_cmdline_user_args())
-	if args == null:
+	if args.has("__error"):
 		quit(1)
 		return
 	var code := HeadlessRunner.run(args)
@@ -65,12 +65,14 @@ func _parse_args(raw: PackedStringArray) -> Dictionary:
 
 	if d["out"] == "":
 		return _err("--out is required")
+	if int(d["night"]) < 1 or int(d["night"]) > 3:
+		return _err("--night must be 1, 2 or 3")
 	if not has_ticks:
 		return _err("--ticks is required")
 	return d
 
-func _err(msg: String) -> Variant:
+func _err(msg: String) -> Dictionary:
 	if msg != "":
 		printerr("headless.gd: " + msg)
 	printerr("Usage: godot --headless --path . --script res://src/headless.gd -- --seed <int> --night <int> --ticks <int> --out <file.jsonl> [--scenario <file.json>] [--inputs <file.json>] [--snapshot-every <int>]")
-	return null
+	return {"__error": true}

@@ -73,7 +73,10 @@ class ShadeData extends RefCounted:
 	var state: String = "spawning"
 	var state_ticks_left: int = 0    # ticks remaining in current temp state
 	var previous_state: String = ""  # state to restore after temp state ends
-	var target_lantern_id: String = ""  # Phase 3: drain target
+	var target_lantern_id: String = ""  # Phase 3: drain / wander target
+	var drain_ticks: int = 0            # ticks drained since last fuel_drain event
+	var push_ticks_left: int = 0        # safe-zone push-out remaining (no damage while > 0)
+	var push_to: Vector2 = Vector2.ZERO # XZ rim point of the push-out
 
 	func state_string() -> String:
 		return state

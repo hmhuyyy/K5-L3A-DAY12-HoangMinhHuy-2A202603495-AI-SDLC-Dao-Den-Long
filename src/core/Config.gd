@@ -110,8 +110,18 @@ var score_per_flame_left: int    # 50 per flame at dawn win
 # raw contract fields
 var contract_version: String
 var team: String
+var build_cmd: String
+var run_cmd: String
+var headless_cmd: String
+var bench_cmd: String   # required from contract v1.3
+var soak_cmd: String    # required from contract v1.3
 
-# ── Required tuning keys (must be present in v1.1 contract) ──────────────
+# Last validation error (field path included); empty after a successful load.
+static var last_error: String = ""
+
+const SUPPORTED_VERSIONS: Array[String] = ["1.1", "1.2", "1.3"]
+
+# ── Required tuning keys (must be present in the v1.2+ contract) ──────────────
 const _REQUIRED_TUNING: Array[String] = [
 	"player_speed", "player_accel_s", "carry_capacity", "capacity_max", "lantern_cost",
 	"relight_cost", "fuel_max", "fuel_decay_per_s", "fuel_per_mote",
@@ -199,7 +209,7 @@ static func _coerce_value(value: Variant, expected_type: String, field_name: Str
 			# float accepts JSON int or float
 			if value is int or value is float:
 				return float(value)
-			push_error("Config: field '%s' type error: expected float, got %s" % [
+			_fail("Config: field '%s' type error: expected float, got %s" % [
 				field_name, _type_name(value)])
 			return null
 		"int":
@@ -209,179 +219,102 @@ static func _coerce_value(value: Variant, expected_type: String, field_name: Str
 			if value is float:
 				# Check for special float values and fractional parts
 				if is_nan(value) or is_inf(value):
-					push_error("Config: field '%s' type error: float is NaN or Inf" % field_name)
+					_fail("Config: field '%s' type error: float is NaN or Inf" % field_name)
 					return null
 				if value != floor(value):
-					push_error("Config: field '%s' type error: expected int, got float %f (not whole)" % [
+					_fail("Config: field '%s' type error: expected int, got float %f (not whole)" % [
 						field_name, value])
 					return null
 				# Accept whole-valued float and convert to int
 				return int(value)
-			push_error("Config: field '%s' type error: expected int, got %s" % [
+			_fail("Config: field '%s' type error: expected int, got %s" % [
 				field_name, _type_name(value)])
 			return null
 		"bool":
 			# bool requires boolean
 			if value is bool:
 				return bool(value)
-			push_error("Config: field '%s' type error: expected bool, got %s" % [
+			_fail("Config: field '%s' type error: expected bool, got %s" % [
 				field_name, _type_name(value)])
 			return null
 	push_error("Config: _coerce_value unknown type '%s'" % expected_type)
 	return null
 
 # ── loader ───────────────────────────────────────────────────
+static func _fail(msg: String) -> Config:
+	last_error = msg
+	push_error(msg)
+	return null
+
 static func load_from_file(path: String) -> Config:
+	last_error = ""
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		push_error("Config: cannot open '%s'" % path)
-		return null
+		return _fail("Config: cannot open '%s'" % path)
 	var txt := f.get_as_text()
 	f.close()
 	var json := JSON.new()
 	var err := json.parse(txt)
 	if err != OK:
-		push_error("Config: JSON parse error in '%s' at line %d: %s" % [
+		return _fail("Config: JSON parse error in '%s' at line %d: %s" % [
 			path, json.get_error_line(), json.get_error_message()])
-		return null
-	var d: Variant = json.get_data()
+	return parse_dict(json.get_data())
 
-	# Validate root is dict
+# Strict validation of an already-parsed contract. Returns null (and sets last_error)
+# on the first problem; the message always names the offending field path.
+static func parse_dict(d: Variant) -> Config:
+	last_error = ""
 	if not (d is Dictionary):
-		push_error("Config: root must be dict, got %s" % typeof(d))
-		return null
-
-	# Validate contract version — must be "1.1" or "1.2"
+		return _fail("Config: root must be dict, got %s" % _type_name(d))
 	var ver: Variant = d.get("contract_version", null)
 	if not (ver is String):
-		push_error("Config: contract_version must be String, got %s" % typeof(ver))
-		return null
-	if ver != "1.1" and ver != "1.2":
-		push_error("Config: contract_version must be '1.1' or '1.2', got '%s'" % ver)
-		return null
-
+		return _fail("Config: contract_version must be String, got %s" % _type_name(ver))
+	if not SUPPORTED_VERSIONS.has(ver):
+		return _fail("Config: contract_version must be one of %s, got '%s'" % [SUPPORTED_VERSIONS, ver])
 	var t: Variant = d.get("tuning", null)
 	if not (t is Dictionary):
-		push_error("Config: tuning must be dict, got %s" % typeof(t))
-		return null
-
+		return _fail("Config: tuning must be dict, got %s" % _type_name(t))
 	var sc: Variant = t.get("score", null)
 	if not (sc is Dictionary):
-		push_error("Config: tuning['score'] must be dict, got %s" % typeof(sc))
-		return null
+		return _fail("Config: tuning.score must be dict, got %s" % _type_name(sc))
 
-	# Validate required tuning keys
+	var root_strings: Array[String] = ["team", "build_cmd", "run_cmd", "headless_cmd"]
+	if ver == "1.3":
+		root_strings.append("bench_cmd")
+		root_strings.append("soak_cmd")
+	for key: String in root_strings:
+		if not d.has(key):
+			return _fail("Config: required field '%s' is missing" % key)
+		if not (d[key] is String):
+			return _fail("Config: field '%s' type error: expected string, got %s" % [key, _type_name(d[key])])
 	for key: String in _REQUIRED_TUNING:
 		if not t.has(key):
-			push_error("Config: required tuning key '%s' is missing" % key)
-			return null
-
-	# Validate required score keys
+			return _fail("Config: required field 'tuning.%s' is missing" % key)
 	for key: String in _REQUIRED_SCORE:
 		if not sc.has(key):
-			push_error("Config: required score['%s'] is missing" % key)
-			return null
+			return _fail("Config: required field 'tuning.score.%s' is missing" % key)
 
 	var c := Config.new()
 	c.contract_version = ver
-	c.team = str(d.get("team", ""))
+	c.team = d["team"]
+	c.build_cmd = d["build_cmd"]
+	c.run_cmd = d["run_cmd"]
+	c.headless_cmd = d["headless_cmd"]
+	if ver == "1.3":
+		c.bench_cmd = d["bench_cmd"]
+		c.soak_cmd = d["soak_cmd"]
 
-	# Load and type-validate all tuning fields
 	for key: String in _REQUIRED_TUNING:
-		var val: Variant = t[key]
-		var expected_type: String = _TYPE_SPECS.get(key, "?")
-		var coerced: Variant = _coerce_value(val, expected_type, key)
+		var coerced: Variant = _coerce_value(t[key], _TYPE_SPECS.get(key, "?"), "tuning." + key)
 		if coerced == null:
 			return null
-		# Assign to corresponding var
-		match key:
-			"player_speed": c.player_speed = coerced
-			"player_accel_s": c.player_accel_s = coerced
-			"carry_capacity": c.carry_capacity = coerced
-			"lantern_cost": c.lantern_cost = coerced
-			"lantern_count_night1": c.lantern_count_night1 = coerced
-			"pickup_radius": c.pickup_radius = coerced
-			"pickup_height_m": c.pickup_height_m = coerced
-			"interact_radius": c.interact_radius = coerced
-			"pulse_cost": c.pulse_cost = coerced
-			"pulse_radius": c.pulse_radius = coerced
-			"pulse_center_height_m": c.pulse_center_height_m = coerced
-			"pulse_stun_ticks": c.pulse_stun_ticks = coerced
-			"pulse_push_m": c.pulse_push_m = coerced
-			"pulse_push_ticks": c.pulse_push_ticks = coerced
-			"pulse_cooldown_s": c.pulse_cooldown_s = coerced
-			"safe_radius": c.safe_radius = coerced
-			"safe_push_ticks": c.safe_push_ticks = coerced
-			"shade_speed": c.shade_speed = coerced
-			"shade_speed_night3": c.shade_speed_night3 = coerced
-			"shade_detect_m": c.shade_detect_m = coerced
-			"shade_abandon_m": c.shade_abandon_m = coerced
-			"shade_hit_radius": c.shade_hit_radius = coerced
-			"shade_hit_height_m": c.shade_hit_height_m = coerced
-			"shade_recoil_m": c.shade_recoil_m = coerced
-			"shade_recoil_ticks": c.shade_recoil_ticks = coerced
-			"night1_duration_s": c.night1_duration_s = coerced
-			"night2_duration_s": c.night2_duration_s = coerced
-			"night3_duration_s": c.night3_duration_s = coerced
-			"flames": c.flames = coerced
-			"invuln_ticks": c.invuln_ticks = coerced
-			"hit_drop_ratio": c.hit_drop_ratio = coerced
-			"mote_drop_ttl_ticks": c.mote_drop_ttl_ticks = coerced
-			"mote_drop_ring_min_m": c.mote_drop_ring_min_m = coerced
-			"mote_drop_ring_max_m": c.mote_drop_ring_max_m = coerced
-			"mote_initial_count": c.mote_initial_count = coerced
-			"mote_cap": c.mote_cap = coerced
-			"mote_spawn_interval_ticks": c.mote_spawn_interval_ticks = coerced
-			"fall_enabled": c.fall_enabled = coerced
-			"fall_y_threshold": c.fall_y_threshold = coerced
-			"fall_wait_ticks": c.fall_wait_ticks = coerced
-			"jump_vel_y": c.jump_vel_y = coerced
-			"gravity": c.gravity = coerced
-			"dash_speed": c.dash_speed = coerced
-			"dash_duration_s": c.dash_duration_s = coerced
-			"dash_cooldown_s": c.dash_cooldown_s = coerced
-			"charm_duration_ticks": c.charm_duration_ticks = coerced
-			"charm_speed": c.charm_speed = coerced
-			"charm_respawn_ticks": c.charm_respawn_ticks = coerced
-			"drifter_speed_idle": c.drifter_speed_idle = coerced
-			"drifter_speed_chase": c.drifter_speed_chase = coerced
-			"drifter_speed_flee": c.drifter_speed_flee = coerced
-			"drifter_detect_m": c.drifter_detect_m = coerced
-			"drifter_steal_max_motes": c.drifter_steal_max_motes = coerced
-			"drifter_steal_radius": c.drifter_steal_radius = coerced
-			"drifter_flee_ticks": c.drifter_flee_ticks = coerced
-			"drifter_carried_min": c.drifter_carried_min = coerced
-			"wind_cycle_ticks": c.wind_cycle_ticks = coerced
-			"wind_warning_ticks": c.wind_warning_ticks = coerced
-			"wind_active_ticks": c.wind_active_ticks = coerced
-			"wind_speed": c.wind_speed = coerced
-			# Fuel/lantern (v1.2)
-			"capacity_max": c.capacity_max = coerced
-			"relight_cost": c.relight_cost = coerced
-			"fuel_max": c.fuel_max = coerced
-			"fuel_decay_per_s": c.fuel_decay_per_s = coerced
-			"fuel_per_mote": c.fuel_per_mote = coerced
-			"low_fuel_threshold": c.low_fuel_threshold = coerced
-			"drain_per_s": c.drain_per_s = coerced
-			"win_ratio": c.win_ratio = coerced
-			"shade_drain_radius": c.shade_drain_radius = coerced
+		c.set(key, coerced)
 
-	# Score — validate and load
 	for key: String in _REQUIRED_SCORE:
-		var val: Variant = sc[key]
-		var expected_type: String = "int"  # all score fields are int
-		var coerced: Variant = _coerce_value(val, expected_type, "score['%s']" % key)
+		var coerced: Variant = _coerce_value(sc[key], "int", "tuning.score." + key)
 		if coerced == null:
 			return null
-		match key:
-			"per_mote": c.score_per_mote = coerced
-			"per_lantern": c.score_per_lantern = coerced
-			"per_relight": c.score_per_relight = coerced
-			"per_stun": c.score_per_stun = coerced
-			"per_stun_drain": c.score_per_stun_drain = coerced
-			"per_lantern_at_dawn": c.score_per_lantern_at_dawn = coerced
-			"per_flame_left": c.score_per_flame_left = coerced
-
+		c.set("score_" + key, coerced)
 	return c
 
 # ── Helpers ──────────────────────────────────────────────────

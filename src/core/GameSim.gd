@@ -89,6 +89,11 @@ func init(p_cfg: Config, seed: int, night_num: int, scenario: Dictionary) -> voi
 func _wind_enabled() -> bool:
 	return bool(world.get("wind_enabled", false))
 
+# Lanterns that must be lit at dawn: ceil(win_ratio * total). The epsilon guards
+# against float noise such as 0.6 * 5 = 3.0000000000000004.
+func required_lit() -> int:
+	return ceili(cfg.win_ratio * float(lanterns.size()) - 1e-9)
+
 func time_left_s() -> float:
 	return max(0.0, initial_time_left_s - sim_tick / TICK_RATE)
 
@@ -123,6 +128,9 @@ func _build_player(s: Dictionary) -> void:
 			player.pulse_cd_ticks = int(pd["pulse_cd_ticks"])
 		if pd.has("charm_ticks"):
 			player.charm_ticks = int(pd["charm_ticks"])
+		if pd.has("successful_lights"):
+			player.successful_lights = int(pd["successful_lights"])
+			_update_capacity()
 	else:
 		player.flames = cfg.flames
 
@@ -152,9 +160,9 @@ func _build_lanterns(s: Dictionary) -> void:
 				ld.relit_count = int(p["relit_count"])
 			# fuel: set from scenario or default for lit/unlit
 			if p.has("fuel"):
-				ld.fuel_units = int(float(p["fuel"]) * 60.0)
+				ld.fuel_units = roundi(float(p["fuel"]) * 60.0)
 			elif ld.lit:
-				ld.fuel_units = int(float(cfg.fuel_max) * 60.0)  # full when pre-lit, no score
+				ld.fuel_units = _full_fuel_units()  # full when pre-lit, no score
 			# Ensure ever_lit is true if lit
 			if ld.lit:
 				ld.ever_lit = true
@@ -206,7 +214,8 @@ func _build_shades(s: Dictionary) -> void:
 			var pv: Array = entry["pos"]
 			sd.pos = Vector3(float(pv[0]), float(pv[1]), float(pv[2]))
 			sd.state = entry.get("state", Entities.SHADE_CHASE)
-			sd.state_ticks_left = entry.get("state_ticks_left", 0)
+			sd.state_ticks_left = int(entry.get("state_ticks_left", 0))
+			sd.target_lantern_id = str(entry.get("target_lantern_id", ""))
 			shades.append(sd)
 		return
 	if not random_shades:
@@ -249,6 +258,8 @@ func _build_charms(s: Dictionary) -> void:
 func tick(input_state: InputState) -> EventBus:
 	var current_tick := executed_ticks + 1
 	executed_ticks += 1
+	if state == "won" or state == "lost":
+		return bus
 
 	# STEP 1: Read input; handle pause FIRST. If just paused, stop step here.
 	if input_state != null and input_state.pause_edge():
@@ -320,28 +331,44 @@ func _step_counters() -> void:
 			c.respawn_ticks_left -= 1
 			if c.respawn_ticks_left <= 0:
 				c.available = true
-	# Fuel decay + shade drain counter tracking (per tick, per lantern)
-	# Drain counter: track ticks since last fuel_drain event per shade
+	# Shade temporary-state timers (recoil / stunned) — step 2 per TICKET-02
+	for sd: Entities.ShadeData in shades:
+		if sd.state == Entities.SHADE_SPAWNING:
+			continue
+		if sd.state_ticks_left > 0:
+			sd.state_ticks_left -= 1
+			if sd.state_ticks_left <= 0:
+				sd.state = Entities.SHADE_CHASE if sd.previous_state == Entities.SHADE_CHASE else Entities.SHADE_WANDER
+				sd.previous_state = ""
+	# Fuel (TICKET-03): integer units of 1/60 fuel. Lit lantern loses decay units per tick,
+	# every draining shade adds drain units per tick.
+	var decay_units := roundi(cfg.fuel_decay_per_s)
+	var drain_units := roundi(cfg.drain_per_s)
 	for ld: Entities.LanternData in lanterns:
 		if not ld.lit:
 			continue
-		if ld.fuel_units <= 0:
-			continue
-		# Base decay: 1 unit/tick
-		ld.fuel_units -= 1
-		# Extra drain from draining shades (5 fuel/s = 5/60 units/tick per shade)
+		ld.fuel_units -= decay_units
 		for sd: Entities.ShadeData in shades:
 			if sd.state == Entities.SHADE_DRAIN and sd.target_lantern_id == ld.id:
-				var drain_units := int(cfg.drain_per_s)  # drain_per_s = 5 → 5 units/tick
 				ld.fuel_units -= drain_units
-		if ld.fuel_units <= 0:
-			ld.fuel_units = 0
-			ld.lit = false
-			ld.deposited = 0
-			ld.ever_lit = true
-			# lantern_out event emitted in _step_shades after counters (via post check)
-			# Using bus directly here since this is step 2
-			bus.record(executed_ticks + 1, "lantern_out", {"lantern_id": ld.id})
+	# fuel_drain events every 60 ticks per draining shade (fuel after this tick's update)
+	var ev_tick := executed_ticks
+	for sd: Entities.ShadeData in shades:
+		if sd.state != Entities.SHADE_DRAIN:
+			continue
+		var dl := _find_lantern_by_id(sd.target_lantern_id)
+		if dl == null or not dl.lit:
+			continue
+		sd.drain_ticks += 1
+		if sd.drain_ticks >= 60:
+			sd.drain_ticks = 0
+			bus.record(ev_tick, "fuel_drain", {
+				"lantern_id": dl.id, "shade_id": sd.id,
+				"fuel": _r1(maxf(0.0, float(dl.fuel_units) / 60.0))
+			})
+	for ld: Entities.LanternData in lanterns:
+		if ld.lit and ld.fuel_units <= 0:
+			_extinguish(ld, ev_tick)
 
 # ── STEP 3: player movement (jump, dash, bounce, wind, air control) ──
 func _step_player_move(inp: InputState, tick: int) -> void:
@@ -468,7 +495,6 @@ func _step_fall(tick: int) -> void:
 			# Respawn
 			player.pos = WorldDefs.player_spawn(night)
 			player.vel = Vector3.ZERO
-			player.flames -= 1
 			player.invuln_ticks = cfg.invuln_ticks
 			player.falling = false
 			player.grounded = true
@@ -530,40 +556,29 @@ func _step_pickup(tick: int) -> void:
 			})
 
 # ── STEP 5: lantern interaction ─────────────────────────────
+# TICKET-03: candidates = unlit (first light / relight) or lit with fuel < full.
+# Nearest within interact_radius, tie-break id ascending. Full lanterns are never selected.
 func _step_lantern_interact(inp: InputState, tick: int) -> void:
 	if inp == null or not inp.interact_edge():
 		return
 	if player.falling:
 		return
-	# TICKET-03: find nearest lantern that can accept resources:
-	#  - unlit, never lit (needs lantern_cost=10 motes to light)
-	#  - unlit, ever_lit (needs relight_cost=5 motes to relight)
-	#  - lit but fuel not full (can refuel)
 	var best: Entities.LanternData = null
 	var best_dist := INF
 	for ld: Entities.LanternData in lanterns:
-		var can_accept := false
-		if not ld.lit:
-			can_accept = true  # unlit: can light or relight
-		elif ld.fuel_units < int(cfg.fuel_max * 60):
-			can_accept = true  # lit but not full: can refuel
-		if not can_accept:
+		if ld.lit and ld.fuel_units >= _full_fuel_units():
 			continue
-		var dx: float = player.pos.x - ld.pos.x
-		var dz: float = player.pos.z - ld.pos.z
-		var d: float = sqrt(dx * dx + dz * dz)
+		var d := _xz_dist(player.pos, ld.pos)
 		if d <= cfg.interact_radius:
 			if d < best_dist or (d == best_dist and ld.id < best.id):
 				best_dist = d
 				best = ld
-	if best == null or player.carried == 0:
+	if best == null or player.carried <= 0:
 		return
-
-	if not best.lit and not best.ever_lit:
-		# First light: needs lantern_cost motes
-		var cost := cfg.lantern_cost
-		var space := cost - best.deposited
-		var amount := mini(player.carried, space)
+	if not best.lit:
+		var relight := best.ever_lit
+		var cost := cfg.relight_cost if relight else cfg.lantern_cost
+		var amount := mini(player.carried, cost - best.deposited)
 		if amount <= 0:
 			return
 		player.carried -= amount
@@ -574,50 +589,34 @@ func _step_lantern_interact(inp: InputState, tick: int) -> void:
 		})
 		if best.deposited >= cost:
 			best.lit = true
-			best.fuel_units = int(cfg.fuel_max * 60)
+			best.fuel_units = _full_fuel_units()
 			best.ever_lit = true
-			best.deposited = 0
+			best.deposited = 0  # deposited counts motes toward the CURRENT light-up only
+			if relight:
+				best.relit_count += 1
+				score += cfg.score_per_relight
+			else:
+				score += cfg.score_per_lantern
 			player.successful_lights += 1
 			_update_capacity()
-			bus.record(tick, "lantern_lit", {"lantern_id": best.id, "relight": false})
-			score += cfg.score_per_lantern
-	elif not best.lit and best.ever_lit:
-		# Relight: needs relight_cost motes
-		var cost := cfg.relight_cost
-		var space := cost - best.deposited
-		var amount := mini(player.carried, space)
-		if amount <= 0:
-			return
-		player.carried -= amount
-		best.deposited += amount
-		score += amount * cfg.score_per_mote
-		bus.record(tick, "deposit", {
-			"lantern_id": best.id, "amount": amount, "deposited": best.deposited
-		})
-		if best.deposited >= cost:
-			best.lit = true
-			best.fuel_units = int(cfg.fuel_max * 60)
-			best.relit_count += 1
-			best.deposited = 0
-			player.successful_lights += 1
-			_update_capacity()
-			bus.record(tick, "lantern_lit", {"lantern_id": best.id, "relight": true})
-			score += cfg.score_per_relight
+			bus.record(tick, "lantern_lit", {"lantern_id": best.id, "relight": relight})
+			_trigger_safe_push(best)
 	else:
-		# Refuel: lit but not full fuel
-		var fuel_now := float(best.fuel_units) / 60.0
-		var fuel_space := cfg.fuel_max - fuel_now
-		var used := mini(player.carried, ceili(fuel_space / float(cfg.fuel_per_mote)))
+		# Refuel: used = min(carried, ceil((fuel_max - fuel) / fuel_per_mote)) — integer arithmetic
+		var per_mote_units := cfg.fuel_per_mote * 60
+		var missing := _full_fuel_units() - best.fuel_units
+		var used := mini(player.carried, (missing + per_mote_units - 1) / per_mote_units)
 		if used <= 0:
 			return
+		var was_weak := best.fuel_units < _low_fuel_units()
 		player.carried -= used
-		var fuel_add := used * cfg.fuel_per_mote
-		var new_fuel := minf(cfg.fuel_max, fuel_now + fuel_add)
-		best.fuel_units = int(new_fuel * 60.0)
+		best.fuel_units = mini(_full_fuel_units(), best.fuel_units + used * per_mote_units)
 		score += used * cfg.score_per_mote
 		bus.record(tick, "refuel", {
-			"lantern_id": best.id, "amount": used, "fuel": _r1(new_fuel)
+			"lantern_id": best.id, "amount": used, "fuel": _r1(float(best.fuel_units) / 60.0)
 		})
+		if was_weak and best.fuel_units >= _low_fuel_units():
+			_trigger_safe_push(best)
 
 func _update_capacity() -> void:
 	player.capacity = mini(cfg.capacity_max, 10 + 2 * player.successful_lights)
@@ -644,14 +643,19 @@ func _step_pulse(inp: InputState, tick: int) -> void:
 		var dz: float = center.z - sd.pos.z
 		var d: float = sqrt(dx * dx + dy * dy + dz * dz)
 		if d <= cfg.pulse_radius:
-			# Stun: 120 ticks; stunned overrides recoil/drain
-			sd.previous_state = sd.state if sd.state != Entities.SHADE_STUNNED else sd.previous_state
+			# Stun: stunned overrides recoil/drain. Remember the pre-pulse state for hysteresis.
+			var was_drain := sd.state == Entities.SHADE_DRAIN
+			if sd.state == Entities.SHADE_WANDER or sd.state == Entities.SHADE_CHASE:
+				sd.previous_state = sd.state
+			elif sd.state == Entities.SHADE_DRAIN or sd.state == Entities.SHADE_SPAWNING:
+				sd.previous_state = Entities.SHADE_WANDER
+			# recoil / stunned: keep the previously saved state
 			sd.state = Entities.SHADE_STUNNED
 			sd.state_ticks_left = cfg.pulse_stun_ticks
-			# Push: start push animation, 4m over 15 ticks
+			sd.drain_ticks = 0
 			_pulse_push_left[sd.id] = cfg.pulse_push_ticks
-			# Score: +15 if was draining, +5 otherwise
-			if sd.previous_state == Entities.SHADE_DRAIN:
+			# Score: +15 total if it was draining right before the pulse, else +5
+			if was_drain:
 				score += cfg.score_per_stun_drain
 			else:
 				score += cfg.score_per_stun
@@ -678,20 +682,21 @@ func _step_pulse(inp: InputState, tick: int) -> void:
 
 # ── STEP 8a: shade movement & state machine ───────────────────
 func _step_shades(tick: int) -> void:
-	# Apply pulse push animation
+	# Pulse push animation (4 m over 15 ticks, away from player; +X when coincident)
 	for shade_id: String in _pulse_push_left.keys():
 		var left: int = _pulse_push_left[shade_id]
 		if left > 0:
-			var sd := _find_shade(shade_id)
-			if sd != null and sd.state == Entities.SHADE_STUNNED:
-				# Push 4m over 15 ticks = 4/15 per tick, away from player
-				var dx: float = sd.pos.x - player.pos.x
-				var dz: float = sd.pos.z - player.pos.z
-				var d := sqrt(dx * dx + dz * dz)
-				if d > 0.001:
-					var push := (cfg.pulse_push_m / cfg.pulse_push_ticks) * DT * TICK_RATE
-					sd.pos.x += (dx / d) * push
-					sd.pos.z += (dz / d) * push
+			var psd := _find_shade(shade_id)
+			if psd != null and psd.state == Entities.SHADE_STUNNED and psd.push_ticks_left <= 0:
+				var pdx: float = psd.pos.x - player.pos.x
+				var pdz: float = psd.pos.z - player.pos.z
+				var pd := sqrt(pdx * pdx + pdz * pdz)
+				var push := cfg.pulse_push_m / float(cfg.pulse_push_ticks)
+				if pd > 0.001:
+					psd.pos.x += (pdx / pd) * push
+					psd.pos.z += (pdz / pd) * push
+				else:
+					psd.pos.x += push
 			_pulse_push_left[shade_id] = left - 1
 		else:
 			_pulse_push_left.erase(shade_id)
@@ -699,115 +704,161 @@ func _step_shades(tick: int) -> void:
 	for sd: Entities.ShadeData in shades:
 		_step_shade_one(sd, tick)
 
-func _step_shade_one(sd: Entities.ShadeData, tick: int) -> void:
-	# Decrement temp state timer
-	if sd.state_ticks_left > 0:
-		sd.state_ticks_left -= 1
-		if sd.state_ticks_left <= 0:
-			# Exit temp state: restore hysteresis from previous_state
-			match sd.previous_state:
-				Entities.SHADE_CHASE:
-					sd.state = Entities.SHADE_CHASE
-				_:
-					sd.state = Entities.SHADE_WANDER
-			sd.previous_state = ""
-	# spawning → wander after first tick
+func _step_shade_one(sd: Entities.ShadeData, _tick: int) -> void:
+	# spawning -> wander after first tick (no movement on that tick)
 	if sd.state == Entities.SHADE_SPAWNING:
 		sd.state = Entities.SHADE_WANDER
 		return
-	if sd.state == Entities.SHADE_STUNNED:
-		return  # no movement while stunned
-	if sd.state == Entities.SHADE_RECOIL:
-		var dx: float = sd.pos.x - player.pos.x
-		var dz: float = sd.pos.z - player.pos.z
-		var d := sqrt(dx * dx + dz * dz)
-		if d > 0.001:
-			var step := (cfg.shade_recoil_m / cfg.shade_recoil_ticks) * DT * TICK_RATE
-			sd.pos.x += (dx / d) * step
-			sd.pos.z += (dz / d) * step
+	# Safe-zone push-out overrides AI movement (and suppresses damage, see hits)
+	if sd.push_ticks_left > 0:
+		_apply_safe_push(sd)
 		return
-
-	# ── TICKET-03: wander → find weak lantern or drain ───────────
-	if sd.state == Entities.SHADE_WANDER:
-		# Check if a weak (lit, fuel<30) lantern is nearby — if so, target it
-		var weak_target := _find_weak_lantern_for_shade()
-		if weak_target != null and sd.target_lantern_id.is_empty():
-			sd.target_lantern_id = weak_target.id
-		elif sd.target_lantern_id.is_empty():
-			# Normal wander: stand still (B12)
+	match sd.state:
+		Entities.SHADE_STUNNED:
 			return
-		# If we have a target, move toward it
-		if not sd.target_lantern_id.is_empty():
-			var target_ld := _find_lantern_by_id(sd.target_lantern_id)
-			if target_ld == null or not target_ld.lit or target_ld.fuel_units == 0:
-				# Target gone or extinguished
-				sd.target_lantern_id = ""
-				return
-			var dx: float = target_ld.pos.x - sd.pos.x
-			var dz: float = target_ld.pos.z - sd.pos.z
-			var dist := sqrt(dx * dx + dz * dz)
-			if dist <= cfg.shade_drain_radius:
-				# Enter drain: shade is on the lantern
-				sd.state = Entities.SHADE_DRAIN
-				sd.previous_state = Entities.SHADE_WANDER
+		Entities.SHADE_RECOIL:
+			var rdx: float = sd.pos.x - player.pos.x
+			var rdz: float = sd.pos.z - player.pos.z
+			var rd := sqrt(rdx * rdx + rdz * rdz)
+			var rstep := cfg.shade_recoil_m / float(cfg.shade_recoil_ticks)
+			if rd > 0.001:
+				sd.pos.x += (rdx / rd) * rstep
+				sd.pos.z += (rdz / rd) * rstep
 			else:
-				var speed := cfg.night_shade_speed(night)
-				var step := speed * DT
-				sd.pos.x += (dx / dist) * step
-				sd.pos.z += (dz / dist) * step
-		return
-
-	if sd.state == Entities.SHADE_DRAIN:
-		# Drain: stand still; draining handled in step_counters (1 unit/tick per shade)
-		# Check exit conditions
-		var target_ld := _find_lantern_by_id(sd.target_lantern_id)
-		var dxp: float = player.pos.x - sd.pos.x
-		var dzp: float = player.pos.z - sd.pos.z
-		var dist_to_player := sqrt(dxp * dxp + dzp * dzp)
-		if dist_to_player <= cfg.shade_detect_m:
-			# Player in range → chase
-			sd.state = Entities.SHADE_CHASE
-			sd.target_lantern_id = ""
+				sd.pos.x += rstep
 			return
-		if target_ld == null or not target_ld.lit or target_ld.fuel_units == 0:
-			sd.state = Entities.SHADE_WANDER
-			sd.target_lantern_id = ""
+		Entities.SHADE_DRAIN:
+			_step_shade_drain(sd)
 			return
-		var fuel_actual := float(target_ld.fuel_units) / 60.0
-		if fuel_actual >= float(cfg.low_fuel_threshold):
-			# Lantern refueled above threshold → wander
-			sd.state = Entities.SHADE_WANDER
-			sd.target_lantern_id = ""
-			return
-		var dx_target: float = target_ld.pos.x - sd.pos.x
-		var dz_target: float = target_ld.pos.z - sd.pos.z
-		if sqrt(dx_target * dx_target + dz_target * dz_target) > cfg.shade_drain_radius:
-			sd.state = Entities.SHADE_WANDER
-			sd.target_lantern_id = ""
-		return
-
-	# wander ↔ chase: compute distance to player
-	var dxp: float = player.pos.x - sd.pos.x
-	var dzp: float = player.pos.z - sd.pos.z
-	var dist := sqrt(dxp * dxp + dzp * dzp)
-	# State transitions (hysteresis)
+	# wander <-> chase hysteresis (player distance, XZ)
+	var dist := _xz_dist(player.pos, sd.pos)
 	if sd.state == Entities.SHADE_WANDER and dist <= cfg.shade_detect_m:
 		sd.state = Entities.SHADE_CHASE
 	elif sd.state == Entities.SHADE_CHASE and dist > cfg.shade_abandon_m:
 		sd.state = Entities.SHADE_WANDER
-	# Movement
 	if sd.state == Entities.SHADE_CHASE:
-		var speed := cfg.night_shade_speed(night)
-		var step := speed * DT
-		if dist > 0.001:
-			var nx := dxp / dist
-			var nz := dzp / dist
-			var nx_pos := sd.pos.x + nx * step
-			var nz_pos := sd.pos.z + nz * step
-			if not _in_any_safe_zone(nx_pos, nz_pos):
-				sd.pos.x = nx_pos
-				sd.pos.z = nz_pos
-	# wander without target: stand still (B12)
+		# chase never retargets lanterns (TICKET-03 §4); target id is left untouched
+		_shade_move_toward(sd, player.pos.x, player.pos.z)
+	else:
+		_step_shade_wander(sd)
+
+# Wander: nearest weak lit lantern (fuel < threshold), else nearest unlit lantern.
+func _step_shade_wander(sd: Entities.ShadeData) -> void:
+	var tgt := _pick_wander_target(sd)
+	if tgt == null:
+		sd.target_lantern_id = ""
+		return
+	sd.target_lantern_id = tgt.id
+	var d := _xz_dist(tgt.pos, sd.pos)
+	if d <= cfg.shade_drain_radius:
+		if tgt.lit:
+			sd.state = Entities.SHADE_DRAIN
+			sd.drain_ticks = 0
+		return  # arrived at an unlit lantern: stand still (nothing to drain)
+	_shade_move_toward(sd, tgt.pos.x, tgt.pos.z)
+
+func _step_shade_drain(sd: Entities.ShadeData) -> void:
+	var tgt := _find_lantern_by_id(sd.target_lantern_id)
+	# 1. player within 6 m (= safe_radius) -> chase
+	if _xz_dist(player.pos, sd.pos) <= cfg.safe_radius:
+		_leave_drain(sd, Entities.SHADE_CHASE)
+		return
+	# 2. lantern gone/out -> wander
+	if tgt == null or not tgt.lit:
+		_leave_drain(sd, Entities.SHADE_WANDER)
+		return
+	# 3. refuelled to >= threshold -> wander
+	if tgt.fuel_units >= _low_fuel_units():
+		_leave_drain(sd, Entities.SHADE_WANDER)
+		return
+	# 4. farther than drain radius -> wander
+	if _xz_dist(tgt.pos, sd.pos) > cfg.shade_drain_radius:
+		_leave_drain(sd, Entities.SHADE_WANDER)
+
+func _leave_drain(sd: Entities.ShadeData, new_state: String) -> void:
+	sd.state = new_state
+	sd.drain_ticks = 0
+	if new_state == Entities.SHADE_WANDER:
+		sd.target_lantern_id = ""
+
+func _shade_move_toward(sd: Entities.ShadeData, tx: float, tz: float) -> void:
+	var dx: float = tx - sd.pos.x
+	var dz: float = tz - sd.pos.z
+	var d := sqrt(dx * dx + dz * dz)
+	if d <= 0.001:
+		return
+	var step := cfg.night_shade_speed(night) * DT
+	var nx: float = sd.pos.x + dx / d * step
+	var nz: float = sd.pos.z + dz / d * step
+	if not _in_any_safe_zone(nx, nz):
+		sd.pos.x = nx
+		sd.pos.z = nz
+
+func _apply_safe_push(sd: Entities.ShadeData) -> void:
+	var left := sd.push_ticks_left
+	sd.pos.x += (sd.push_to.x - sd.pos.x) / float(left)
+	sd.pos.z += (sd.push_to.y - sd.pos.z) / float(left)
+	sd.push_ticks_left = left - 1
+
+# A lantern just became a safe zone (lit / relit / refuelled to >= threshold):
+# shades inside are pushed to the rim within safe_push_ticks and cannot hurt meanwhile.
+func _trigger_safe_push(ld: Entities.LanternData) -> void:
+	for sd: Entities.ShadeData in shades:
+		var dx: float = sd.pos.x - ld.pos.x
+		var dz: float = sd.pos.z - ld.pos.z
+		var d := sqrt(dx * dx + dz * dz)
+		if d >= cfg.safe_radius:
+			continue
+		var ux := 1.0
+		var uz := 0.0
+		if d > 0.001:
+			ux = dx / d
+			uz = dz / d
+		var rim := cfg.safe_radius + 0.01
+		sd.push_to = Vector2(ld.pos.x + ux * rim, ld.pos.z + uz * rim)
+		sd.push_ticks_left = cfg.safe_push_ticks
+		if sd.target_lantern_id == ld.id:
+			sd.target_lantern_id = ""
+
+func _pick_wander_target(sd: Entities.ShadeData) -> Entities.LanternData:
+	var weak := _nearest_lantern_to(sd.pos, true)
+	var cur := _find_lantern_by_id(sd.target_lantern_id)
+	# Keep a still-valid explicit/current target; weak lit lanterns always win over unlit ones.
+	if cur != null:
+		if cur.lit and cur.fuel_units < _low_fuel_units():
+			return cur
+		if not cur.lit and weak == null:
+			return cur
+	if weak != null:
+		return weak
+	return _nearest_lantern_to(sd.pos, false)
+
+# weak_lit=true: lit lanterns with fuel < threshold; false: unlit lanterns. Nearest, tie id asc.
+func _nearest_lantern_to(p: Vector3, weak_lit: bool) -> Entities.LanternData:
+	var best: Entities.LanternData = null
+	var best_d := INF
+	for ld: Entities.LanternData in lanterns:
+		if weak_lit:
+			if not ld.lit or ld.fuel_units >= _low_fuel_units():
+				continue
+		elif ld.lit:
+			continue
+		var d := _xz_dist(ld.pos, p)
+		if d < best_d or (d == best_d and best != null and ld.id < best.id):
+			best_d = d
+			best = ld
+	return best
+
+func _low_fuel_units() -> int:
+	return cfg.low_fuel_threshold * 60
+
+func _full_fuel_units() -> int:
+	return cfg.fuel_max * 60
+
+static func _xz_dist(a: Vector3, b: Vector3) -> float:
+	var dx := a.x - b.x
+	var dz := a.z - b.z
+	return sqrt(dx * dx + dz * dz)
 
 func _find_shade(id: String) -> Entities.ShadeData:
 	for sd: Entities.ShadeData in shades:
@@ -821,24 +872,16 @@ func _find_lantern_by_id(id: String) -> Entities.LanternData:
 			return ld
 	return null
 
-# TICKET-03 §4: find nearest lit lantern with fuel < low_fuel_threshold for drain targeting.
-# Only called for wander shades (not chase). Tie-break by id ascending.
-func _find_weak_lantern_for_shade() -> Entities.LanternData:
-	var best: Entities.LanternData = null
-	var best_dist := INF
-	for ld: Entities.LanternData in lanterns:
-		if not ld.lit:
-			continue
-		var fuel_actual := float(ld.fuel_units) / 60.0
-		if fuel_actual >= float(cfg.low_fuel_threshold):
-			continue
-		var dx: float = ld.pos.x - player.pos.x
-		var dz: float = ld.pos.z - player.pos.z
-		var d: float = sqrt(dx * dx + dz * dz)
-		if d < best_dist or (d == best_dist and ld.id < best.id):
-			best_dist = d
-			best = ld
-	return best
+# A lantern ran dry: dark, deposited reset, ever_lit/relit_count kept, drainers go wander.
+func _extinguish(ld: Entities.LanternData, tick: int) -> void:
+	ld.fuel_units = 0
+	ld.lit = false
+	ld.deposited = 0
+	ld.ever_lit = true
+	for sd: Entities.ShadeData in shades:
+		if sd.state == Entities.SHADE_DRAIN and sd.target_lantern_id == ld.id:
+			_leave_drain(sd, Entities.SHADE_WANDER)
+	bus.record(tick, "lantern_out", {"lantern_id": ld.id})
 
 func _in_any_safe_zone(x: float, z: float) -> bool:
 	for ld: Entities.LanternData in lanterns:
@@ -923,7 +966,7 @@ func _step_player_hits(tick: int) -> void:
 	var sorted_shades := shades.duplicate()
 	sorted_shades.sort_custom(func(a: Entities.ShadeData, b: Entities.ShadeData): return a.id < b.id)
 	for sd: Entities.ShadeData in sorted_shades:
-		if sd.state == Entities.SHADE_STUNNED:
+		if sd.state == Entities.SHADE_STUNNED or sd.push_ticks_left > 0:
 			continue
 		# XZ distance + height check
 		var dx: float = player.pos.x - sd.pos.x
@@ -1084,6 +1127,8 @@ func _step_spawn_drifters(tick: int) -> void:
 
 # ── STEP 11: terminal conditions ─────────────────────────────
 func _check_terminal(tick: int) -> void:
+	if state == "won" or state == "lost":
+		return
 	# TICKET-03: dawn survival replaces early all_lit win
 	# Priority: no_flames > dawn_survived > dawn
 	if player.flames <= 0:
@@ -1096,7 +1141,7 @@ func _check_terminal(tick: int) -> void:
 		for ld: Entities.LanternData in lanterns:
 			if ld.lit:
 				lit_count += 1
-		var required := ceili(cfg.win_ratio * lanterns.size())
+		var required := required_lit()
 		if lit_count >= required:
 			# Dawn survival win: score per lit lantern (fuel) + flames
 			for ld: Entities.LanternData in lanterns:

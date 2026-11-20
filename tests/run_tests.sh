@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# run_tests.sh — Phase 1 scenario tests. Exits non-zero on any failure.
+# run_tests.sh — Phase 1-4 regression suite (headless scenarios + in-process unit tests).
+# Exits non-zero on any failure. See docs/notes/test-migration.md for superseded tests.
 set -uo pipefail
 
 GODOT="${GODOT_BIN:-C:/Tools/Godot/Godot_v4.7.2-stable_win64_console.exe}"
@@ -188,6 +189,54 @@ check "F19 jump rose above 0" '[ -n "$Y_PEAK" ] && awk "BEGIN{exit !($Y_PEAK > 1
 # Final snapshot Y should be 0 (landed)
 Y_END=$(grep '"type":"snapshot"' "$OUT/t_f19.jsonl" | grep -o '"player":{[^}]*}' | tail -1 | grep -o '"pos":\[[^]]*\]' | awk -F',' '{print $2}')
 check "F19 player lands back at Y=0" '[ -n "$Y_END" ] && awk "BEGIN{exit !($Y_END < 0.01)}"'
+
+# ── H3: headless Phase 3 end-to-end (drain + fuel_drain + lantern_out) ──
+run H3 "$OUT/t_h3.jsonl" \
+  --seed 1 --night 1 --ticks 200 \
+  --scenario "$SC_WIN/h3_drain.json" --snapshot-every 50
+check "H3 fuel_drain event fires"       'grep -q "\"name\":\"fuel_drain\"" "$OUT/t_h3.jsonl"'
+check "H3 fuel_drain has lantern/shade" 'grep "\"name\":\"fuel_drain\"" "$OUT/t_h3.jsonl" | head -1 | grep -q "\"lantern_id\":\"L1\".*\"shade_id\":\"S1\"\|\"shade_id\":\"S1\".*\"lantern_id\":\"L1\"" '
+check "H3 lantern_out event fires"      'grep -q "\"name\":\"lantern_out\"" "$OUT/t_h3.jsonl"'
+check "H3 snapshot shows drain state"   'grep "\"type\":\"snapshot\"" "$OUT/t_h3.jsonl" | grep -q "\"state\":\"drain\""'
+check "H3 snapshot lantern has fuel/ever_lit/relit_count" 'head -1 "$OUT/t_h3.jsonl" | grep -q "\"ever_lit\":.*\"fuel\":\|\"fuel\":.*\"ever_lit\":"'
+
+# ── N1/N2/N3: headless runs per night (Contract: --night 1|2|3) ─────────
+for N in 1 2 3; do
+  run "N$N" "$OUT/t_night$N.jsonl" --seed 42 --night $N --ticks 600
+  check "N$N headless night=$N runs, snapshot night field" "head -1 \"$OUT/t_night$N.jsonl\" | grep -q \"\\\"night\\\":$N\""
+  check "N$N end record present" "tail -1 \"$OUT/t_night$N.jsonl\" | grep -q \"\\\"type\\\":\\\"end\\\"\""
+  run "N${N}b" "$OUT/t_night${N}b.jsonl" --seed 42 --night $N --ticks 600
+  check "N$N determinism (byte-identical)" "diff -q \"$OUT/t_night$N.jsonl\" \"$OUT/t_night${N}b.jsonl\" >/dev/null"
+done
+check "N-bad invalid night exits non-zero" '! "$GODOT" --headless --path "$ROOT_WIN" --script res://src/headless.gd -- --seed 1 --night 9 --ticks 1 --out "$OUT_WIN/t_bad.jsonl" >/dev/null 2>&1'
+
+# ── JSONL format: UTF-8 no BOM, LF only ──────────────────────────────
+check "JSONL no BOM"  '[ "$(head -c 3 "$OUT/t_night1.jsonl" | od -An -tx1 | tr -d " \n")" != "efbbbf" ]'
+check "JSONL LF only" '! grep -q $'"'"'\r'"'"' "$OUT/t_night1.jsonl"'
+
+# ── Unit / scenario tests (in-process, GDScript) ─────────────────────
+UNIT_LOG="$OUT/unit.log"
+"$GODOT" --headless --path "$ROOT_WIN" --script res://tests/unit/run_unit.gd > "$UNIT_LOG" 2>&1
+UNIT_CODE=$?
+U_PASS=$(grep -c '^PASS ' "$UNIT_LOG" || true)
+U_FAIL=$(grep -c '^FAIL ' "$UNIT_LOG" || true)
+grep '^FAIL ' "$UNIT_LOG" || true
+PASS=$((PASS+U_PASS))
+FAIL=$((FAIL+U_FAIL))
+check "UNIT runner exit code 0 ($U_PASS unit assertions passed, $U_FAIL failed)" "[ $UNIT_CODE -eq 0 ]"
+
+# ── Phase 4 suites (leaderboard, settings, bench/soak harness) ───────
+if [ -f "$ROOT/tests/unit/run_unit_p4.gd" ]; then
+  P4_LOG="$OUT/unit_p4.log"
+  "$GODOT" --headless --path "$ROOT_WIN" --script res://tests/unit/run_unit_p4.gd > "$P4_LOG" 2>&1
+  P4_CODE=$?
+  P4_PASS=$(grep -c '^PASS ' "$P4_LOG" || true)
+  P4_FAIL=$(grep -c '^FAIL ' "$P4_LOG" || true)
+  grep '^FAIL ' "$P4_LOG" || true
+  PASS=$((PASS+P4_PASS))
+  FAIL=$((FAIL+P4_FAIL))
+  check "UNIT-P4 runner exit code 0 ($P4_PASS assertions passed, $P4_FAIL failed)" "[ $P4_CODE -eq 0 ]"
+fi
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
