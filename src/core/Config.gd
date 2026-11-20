@@ -136,6 +136,82 @@ const _REQUIRED_SCORE: Array[String] = [
 	"per_mote", "per_lantern", "per_stun", "per_second_left", "per_flame_left",
 ]
 
+# ── type specs: field_name -> ("float" | "int" | "bool") ──────────────────
+const _TYPE_SPECS: Dictionary = {
+	# Movement (float)
+	"player_speed": "float", "player_accel_s": "float",
+	"jump_vel_y": "float", "gravity": "float",
+	"dash_speed": "float", "dash_duration_s": "float", "dash_cooldown_s": "float",
+	# Mote (mixed)
+	"carry_capacity": "int", "pickup_radius": "float", "pickup_height_m": "float",
+	"mote_initial_count": "int", "mote_cap": "int", "mote_spawn_interval_ticks": "int",
+	"mote_drop_ttl_ticks": "int", "mote_drop_ring_min_m": "float", "mote_drop_ring_max_m": "float",
+	# Lantern (mixed)
+	"lantern_cost": "int", "lantern_count_night1": "int",
+	"interact_radius": "float", "safe_radius": "float", "safe_push_ticks": "int",
+	# Pulse (mixed)
+	"pulse_cost": "int", "pulse_radius": "float", "pulse_center_height_m": "float",
+	"pulse_stun_ticks": "int", "pulse_push_m": "float", "pulse_push_ticks": "int",
+	"pulse_cooldown_s": "float",
+	# Shade (mixed)
+	"shade_speed": "float", "shade_speed_night3": "float",
+	"shade_detect_m": "float", "shade_abandon_m": "float",
+	"shade_hit_radius": "float", "shade_hit_height_m": "float",
+	"shade_recoil_m": "float", "shade_recoil_ticks": "int",
+	# Night (float)
+	"night1_duration_s": "float", "night2_duration_s": "float", "night3_duration_s": "float",
+	# Player health (mixed)
+	"flames": "int", "invuln_ticks": "int", "hit_drop_ratio": "float",
+	# Fall (mixed)
+	"fall_enabled": "bool", "fall_y_threshold": "float", "fall_wait_ticks": "int",
+	# Charm (mixed)
+	"charm_duration_ticks": "int", "charm_speed": "float", "charm_respawn_ticks": "int",
+	# Drifter (mixed)
+	"drifter_speed_idle": "float", "drifter_speed_chase": "float", "drifter_speed_flee": "float",
+	"drifter_detect_m": "float", "drifter_steal_max_motes": "int", "drifter_steal_radius": "float",
+	"drifter_flee_ticks": "int", "drifter_carried_min": "int",
+	# Wind (mixed)
+	"wind_cycle_ticks": "int", "wind_warning_ticks": "int",
+	"wind_active_ticks": "int", "wind_speed": "float",
+}
+
+# ── Helper: validate and convert value to expected type ───────────────────
+static func _type_name(v: Variant) -> String:
+	match typeof(v):
+		TYPE_INT: return "int"
+		TYPE_FLOAT: return "float"
+		TYPE_BOOL: return "bool"
+		TYPE_STRING: return "string"
+		TYPE_DICTIONARY: return "dict"
+		TYPE_ARRAY: return "array"
+		_: return "unknown(%d)" % typeof(v)
+
+static func _coerce_value(value: Variant, expected_type: String, field_name: String) -> Variant:
+	match expected_type:
+		"float":
+			# float accepts JSON int or float
+			if value is int or value is float:
+				return float(value)
+			push_error("Config: tuning['%s'] type error: expected float, got %s" % [
+				field_name, _type_name(value)])
+			return null
+		"int":
+			# int requires integer
+			if value is int:
+				return int(value)
+			push_error("Config: tuning['%s'] type error: expected int, got %s" % [
+				field_name, _type_name(value)])
+			return null
+		"bool":
+			# bool requires boolean
+			if value is bool:
+				return bool(value)
+			push_error("Config: tuning['%s'] type error: expected bool, got %s" % [
+				field_name, _type_name(value)])
+			return null
+	push_error("Config: _coerce_value unknown type '%s'" % expected_type)
+	return null
+
 # ── loader ───────────────────────────────────────────────────
 static func load_from_file(path: String) -> Config:
 	var f := FileAccess.open(path, FileAccess.READ)
@@ -150,15 +226,31 @@ static func load_from_file(path: String) -> Config:
 		push_error("Config: JSON parse error in '%s' at line %d: %s" % [
 			path, json.get_error_line(), json.get_error_message()])
 		return null
-	var d: Dictionary = json.get_data()
+	var d: Variant = json.get_data()
 
-	# Validate contract version — must be exactly "1.1"
-	var ver: String = str(d.get("contract_version", ""))
+	# Validate root is dict
+	if not (d is Dictionary):
+		push_error("Config: root must be dict, got %s" % typeof(d))
+		return null
+
+	# Validate contract version — must be exactly "1.1" (type String)
+	var ver: Variant = d.get("contract_version", null)
+	if not (ver is String):
+		push_error("Config: contract_version must be String, got %s" % typeof(ver))
+		return null
 	if ver != "1.1":
 		push_error("Config: contract_version must be '1.1', got '%s'" % ver)
 		return null
 
-	var t: Dictionary = d.get("tuning", {})
+	var t: Variant = d.get("tuning", null)
+	if not (t is Dictionary):
+		push_error("Config: tuning must be dict, got %s" % typeof(t))
+		return null
+
+	var sc: Variant = t.get("score", null)
+	if not (sc is Dictionary):
+		push_error("Config: tuning['score'] must be dict, got %s" % typeof(sc))
+		return null
 
 	# Validate required tuning keys
 	for key: String in _REQUIRED_TUNING:
@@ -166,104 +258,99 @@ static func load_from_file(path: String) -> Config:
 			push_error("Config: required tuning key '%s' is missing" % key)
 			return null
 
-	var sc: Dictionary = t.get("score", {})
+	# Validate required score keys
 	for key: String in _REQUIRED_SCORE:
 		if not sc.has(key):
-			push_error("Config: required score key '%s' is missing" % key)
+			push_error("Config: required score['%s'] is missing" % key)
 			return null
 
 	var c := Config.new()
 	c.contract_version = ver
 	c.team = str(d.get("team", ""))
 
-	# Movement
-	c.player_speed    = float(t["player_speed"])
-	c.player_accel_s  = float(t["player_accel_s"])
-	c.jump_vel_y      = float(t["jump_vel_y"])
-	c.gravity         = float(t["gravity"])
-	c.dash_speed      = float(t["dash_speed"])
-	c.dash_duration_s = float(t["dash_duration_s"])
-	c.dash_cooldown_s = float(t["dash_cooldown_s"])
+	# Load and type-validate all tuning fields
+	for key: String in _REQUIRED_TUNING:
+		var val: Variant = t[key]
+		var expected_type: String = _TYPE_SPECS.get(key, "?")
+		var coerced: Variant = _coerce_value(val, expected_type, key)
+		if coerced == null:
+			return null
+		# Assign to corresponding var
+		match key:
+			"player_speed": c.player_speed = coerced
+			"player_accel_s": c.player_accel_s = coerced
+			"carry_capacity": c.carry_capacity = coerced
+			"lantern_cost": c.lantern_cost = coerced
+			"lantern_count_night1": c.lantern_count_night1 = coerced
+			"pickup_radius": c.pickup_radius = coerced
+			"pickup_height_m": c.pickup_height_m = coerced
+			"interact_radius": c.interact_radius = coerced
+			"pulse_cost": c.pulse_cost = coerced
+			"pulse_radius": c.pulse_radius = coerced
+			"pulse_center_height_m": c.pulse_center_height_m = coerced
+			"pulse_stun_ticks": c.pulse_stun_ticks = coerced
+			"pulse_push_m": c.pulse_push_m = coerced
+			"pulse_push_ticks": c.pulse_push_ticks = coerced
+			"pulse_cooldown_s": c.pulse_cooldown_s = coerced
+			"safe_radius": c.safe_radius = coerced
+			"safe_push_ticks": c.safe_push_ticks = coerced
+			"shade_speed": c.shade_speed = coerced
+			"shade_speed_night3": c.shade_speed_night3 = coerced
+			"shade_detect_m": c.shade_detect_m = coerced
+			"shade_abandon_m": c.shade_abandon_m = coerced
+			"shade_hit_radius": c.shade_hit_radius = coerced
+			"shade_hit_height_m": c.shade_hit_height_m = coerced
+			"shade_recoil_m": c.shade_recoil_m = coerced
+			"shade_recoil_ticks": c.shade_recoil_ticks = coerced
+			"night1_duration_s": c.night1_duration_s = coerced
+			"night2_duration_s": c.night2_duration_s = coerced
+			"night3_duration_s": c.night3_duration_s = coerced
+			"flames": c.flames = coerced
+			"invuln_ticks": c.invuln_ticks = coerced
+			"hit_drop_ratio": c.hit_drop_ratio = coerced
+			"mote_drop_ttl_ticks": c.mote_drop_ttl_ticks = coerced
+			"mote_drop_ring_min_m": c.mote_drop_ring_min_m = coerced
+			"mote_drop_ring_max_m": c.mote_drop_ring_max_m = coerced
+			"mote_initial_count": c.mote_initial_count = coerced
+			"mote_cap": c.mote_cap = coerced
+			"mote_spawn_interval_ticks": c.mote_spawn_interval_ticks = coerced
+			"fall_enabled": c.fall_enabled = coerced
+			"fall_y_threshold": c.fall_y_threshold = coerced
+			"fall_wait_ticks": c.fall_wait_ticks = coerced
+			"jump_vel_y": c.jump_vel_y = coerced
+			"gravity": c.gravity = coerced
+			"dash_speed": c.dash_speed = coerced
+			"dash_duration_s": c.dash_duration_s = coerced
+			"dash_cooldown_s": c.dash_cooldown_s = coerced
+			"charm_duration_ticks": c.charm_duration_ticks = coerced
+			"charm_speed": c.charm_speed = coerced
+			"charm_respawn_ticks": c.charm_respawn_ticks = coerced
+			"drifter_speed_idle": c.drifter_speed_idle = coerced
+			"drifter_speed_chase": c.drifter_speed_chase = coerced
+			"drifter_speed_flee": c.drifter_speed_flee = coerced
+			"drifter_detect_m": c.drifter_detect_m = coerced
+			"drifter_steal_max_motes": c.drifter_steal_max_motes = coerced
+			"drifter_steal_radius": c.drifter_steal_radius = coerced
+			"drifter_flee_ticks": c.drifter_flee_ticks = coerced
+			"drifter_carried_min": c.drifter_carried_min = coerced
+			"wind_cycle_ticks": c.wind_cycle_ticks = coerced
+			"wind_warning_ticks": c.wind_warning_ticks = coerced
+			"wind_active_ticks": c.wind_active_ticks = coerced
+			"wind_speed": c.wind_speed = coerced
 
-	# Mote
-	c.carry_capacity            = int(t["carry_capacity"])
-	c.pickup_radius             = float(t["pickup_radius"])
-	c.pickup_height_m           = float(t["pickup_height_m"])
-	c.mote_initial_count        = int(t["mote_initial_count"])
-	c.mote_cap                  = int(t["mote_cap"])
-	c.mote_spawn_interval_ticks = int(t["mote_spawn_interval_ticks"])
-	c.mote_drop_ttl_ticks       = int(t["mote_drop_ttl_ticks"])
-	c.mote_drop_ring_min_m      = float(t["mote_drop_ring_min_m"])
-	c.mote_drop_ring_max_m      = float(t["mote_drop_ring_max_m"])
-
-	# Lantern
-	c.lantern_cost         = int(t["lantern_cost"])
-	c.lantern_count_night1 = int(t["lantern_count_night1"])
-	c.interact_radius      = float(t["interact_radius"])
-	c.safe_radius          = float(t["safe_radius"])
-	c.safe_push_ticks      = int(t["safe_push_ticks"])
-
-	# Pulse
-	c.pulse_cost            = int(t["pulse_cost"])
-	c.pulse_radius          = float(t["pulse_radius"])
-	c.pulse_center_height_m = float(t["pulse_center_height_m"])
-	c.pulse_stun_ticks      = int(t["pulse_stun_ticks"])
-	c.pulse_push_m          = float(t["pulse_push_m"])
-	c.pulse_push_ticks      = int(t["pulse_push_ticks"])
-	c.pulse_cooldown_s      = float(t["pulse_cooldown_s"])
-
-	# Shade
-	c.shade_speed        = float(t["shade_speed"])
-	c.shade_speed_night3 = float(t["shade_speed_night3"])
-	c.shade_detect_m     = float(t["shade_detect_m"])
-	c.shade_abandon_m    = float(t["shade_abandon_m"])
-	c.shade_hit_radius   = float(t["shade_hit_radius"])
-	c.shade_hit_height_m = float(t["shade_hit_height_m"])
-	c.shade_recoil_m     = float(t["shade_recoil_m"])
-	c.shade_recoil_ticks = int(t["shade_recoil_ticks"])
-
-	# Night durations
-	c.night1_duration_s = float(t["night1_duration_s"])
-	c.night2_duration_s = float(t["night2_duration_s"])
-	c.night3_duration_s = float(t["night3_duration_s"])
-
-	# Player health
-	c.flames         = int(t["flames"])
-	c.invuln_ticks   = int(t["invuln_ticks"])
-	c.hit_drop_ratio = float(t["hit_drop_ratio"])
-
-	# Fall
-	c.fall_enabled     = bool(t["fall_enabled"])
-	c.fall_y_threshold = float(t["fall_y_threshold"])
-	c.fall_wait_ticks  = int(t["fall_wait_ticks"])
-
-	# Charm
-	c.charm_duration_ticks = int(t["charm_duration_ticks"])
-	c.charm_speed          = float(t["charm_speed"])
-	c.charm_respawn_ticks  = int(t["charm_respawn_ticks"])
-
-	# Drifter
-	c.drifter_speed_idle     = float(t["drifter_speed_idle"])
-	c.drifter_speed_chase    = float(t["drifter_speed_chase"])
-	c.drifter_speed_flee     = float(t["drifter_speed_flee"])
-	c.drifter_detect_m       = float(t["drifter_detect_m"])
-	c.drifter_steal_max_motes = int(t["drifter_steal_max_motes"])
-	c.drifter_steal_radius   = float(t["drifter_steal_radius"])
-	c.drifter_flee_ticks     = int(t["drifter_flee_ticks"])
-	c.drifter_carried_min    = int(t["drifter_carried_min"])
-
-	# Wind
-	c.wind_cycle_ticks   = int(t["wind_cycle_ticks"])
-	c.wind_warning_ticks = int(t["wind_warning_ticks"])
-	c.wind_active_ticks  = int(t["wind_active_ticks"])
-	c.wind_speed         = float(t["wind_speed"])
-
-	# Score — canonical names map directly to contract keys
-	c.score_per_mote         = int(sc["per_mote"])
-	c.score_per_lantern      = int(sc["per_lantern"])
-	c.score_per_stun         = int(sc["per_stun"])
-	c.score_per_second_left  = int(sc["per_second_left"])
-	c.score_per_flame_left   = int(sc["per_flame_left"])
+	# Score — validate and load
+	for key: String in _REQUIRED_SCORE:
+		var val: Variant = sc[key]
+		var expected_type: String = "int"  # all score fields are int
+		var coerced: Variant = _coerce_value(val, expected_type, "score['%s']" % key)
+		if coerced == null:
+			return null
+		match key:
+			"per_mote": c.score_per_mote = coerced
+			"per_lantern": c.score_per_lantern = coerced
+			"per_stun": c.score_per_stun = coerced
+			"per_second_left": c.score_per_second_left = coerced
+			"per_flame_left": c.score_per_flame_left = coerced
 
 	return c
 

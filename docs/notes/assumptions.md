@@ -178,7 +178,7 @@ Phân biệt off-by-one: bước k → `current_tick = executed_ticks + 1`; sau 
 
 **[ASSUME-APPROVED B11]** Drifter đạt cap → skip lượt spawn (không xếp hàng).
 
-**[ASSUME-APPROVED B14]** Idle: heading += 0.5°/tick, speed 2 m/s → quỹ đạo tròn R≈3.82 m quanh điểm sinh. Không xử lý biên đảo (bay tự do). Góc 0.5°/tick là giả định, không phải tuning.
+**[ASSUME-APPROVED B14]** Idle: heading xoay 0.5°/tick, speed 2 m/s → quỹ đạo **đường tròn bán kính 3.82 m**, tâm lệch khỏi điểm sinh theo phương vuông góc heading ban đầu. Không xử lý biên đảo (bay tự do). Góc 0.5°/tick là giả định, không phải tuning.
 
 **[OPEN B15]** Điểm sinh Drifter = "điểm sương ngẫu nhiên". TICKET không định nghĩa tập này. `WorldDefs` phải định nghĩa `mist_spawn_points` **độc lập** với mote spawn points. Chờ định nghĩa.
 
@@ -224,6 +224,33 @@ Trường `score_per_mote_deposited = 10` thay cho `score_per_mote` cũ để tr
 Tick tối đa per night: Đêm 1 = 18.000, Đêm 2 = 19.800, Đêm 3 = 21.600 (= 360×60).
 
 **[DECIDE C6]** Tất cả 3 lần đo đều phải ≤ 30 s. Báo min/median/max. Dùng `time.perf_counter()` Python portable.
+
+**[DECIDE C2]** (sửa từ DECIDE thành duyệt rồi) `wind.dir_deg` là số. Giai đoạn gió xác định bằng `sim_tick`, không dùng dir_deg=0 làm sentinel.
+
+**[ASSUME-APPROVED B7]** Gió tác dụng khi airborne.
+
+### P2.9. Điểm Phase 2 [REQ]
+
+**[REQ TICKET-02 L67]**
+- +10 mỗi đom đóm **NẠP** (deposit), không phải nhặt.
+- +100 mỗi đèn thắp.
+- +5 mỗi Bóng Mực trúng Tỏa Sáng (mỗi con mỗi lần, kể cả con đang choáng).
+- Khi thắng: `+floor(time_left_s) × 2 + 50 × flames`.
+- Tổng điểm game = tổng điểm các đêm đã thắng.
+
+**LƯU Ý:** GameSim Phase 1 hiện tại vẫn **cộng điểm khi PICKUP** (semantics cũ: `cfg.score_per_mote` ghi khi `mote_picked`), không phải khi DEPOSIT. Alias compat `score_per_mote` chỉ bảo đảm thuộc tính được đọc đúng; **chưa thực hiện semantics deposit mới**. Chỉ tuyên bố semantics hoàn thành sau khi GameSim được viết lại (Giai đoạn 2).
+
+---
+
+## ── DECIDE (quyết định đã được duyệt) ──
+
+| ID | Quyết định |
+|---|---|
+| **C1** | Full air control; cùng gia tốc/dừng như trên đất; tốc độ ngang tối đa 6 m/s |
+| **C2** | wind.dir_deg là số; phase gió suy từ sim_tick, không dùng dir_deg=0 |
+| **C3** | Hết ticks khi paused: end.state = "playing" |
+| **C5** | Warning tick 1680, active tick 1800; chu kỳ 1800 |
+| **C6** | Benchmark: 3 lần, tất cả ≤ 30 s, báo min/median/max |
 
 ---
 
