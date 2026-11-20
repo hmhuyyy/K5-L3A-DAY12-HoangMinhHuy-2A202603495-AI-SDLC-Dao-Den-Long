@@ -4,6 +4,8 @@
 
 # Test output (generated, not committed)
 out/
+build/
+dist/
 
 # Local analysis files
 analysis.html
