@@ -12,16 +12,15 @@
   - **Release Title:** `Đảo Đèn Lồng v1.0.0`
   - **Release URL:** `https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/tag/v1.0.0`
   - **Release Notes:** Tổng hợp từ [CHANGELOG.md](file:///c:/AI%20thực%20chiến/K5-L3-LAB-Day12-AI-SDLC/CHANGELOG.md) và [docs/proof/phase-4/RELEASE_NOTES_v1.0.0.md](file:///c:/AI%20thực%20chiến/K5-L3-LAB-Day12-AI-SDLC/docs/proof/phase-4/RELEASE_NOTES_v1.0.0.md).
-- Đã upload và xác minh 4 artifacts thực tế lên GitHub Release `v1.0.0`:
+- Đã upload và xác minh đầy đủ **5 artifacts thực tế** lên GitHub Release `v1.0.0`:
 
 | Asset Name | State | Size (Bytes) | Download URL |
 |---|---|---:|---|
 | `DaoDenLong-v1.0.0-win64.zip` | `uploaded` | `38,224,616` | `https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/download/v1.0.0/DaoDenLong-v1.0.0-win64.zip` |
 | `DaoDenLong.pck` | `uploaded` | `166,612` | `https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/download/v1.0.0/DaoDenLong.pck` |
+| `gameplay_demo.mp4` | `uploaded` | `2,571,352` | `https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/download/v1.0.0/gameplay_demo.mp4` |
 | `bench.json` | `uploaded` | `306` | `https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/download/v1.0.0/bench.json` |
 | `soak.json` | `uploaded` | `241` | `https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/download/v1.0.0/soak.json` |
-
-*(Ghi chú: Khi người dùng hoàn tất quay file `docs/media/gameplay_demo.mp4` theo [docs/demo/RECORDING_GUIDE.md](file:///c:/AI%20thực%20chiến/K5-L3-LAB-Day12-AI-SDLC/docs/demo/RECORDING_GUIDE.md), có thể đính kèm bổ sung file `.mp4` đó vào trang Release trên).*
 
 ## 3. Trạng thái
 - **Status:** **DONE (PASS)**
