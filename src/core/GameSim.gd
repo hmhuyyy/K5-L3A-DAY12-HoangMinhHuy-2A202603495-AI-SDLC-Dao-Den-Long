@@ -844,6 +844,10 @@ func _in_any_safe_zone(x: float, z: float) -> bool:
 	for ld: Entities.LanternData in lanterns:
 		if not ld.lit:
 			continue
+		# TICKET-03 §4: fuel < low_fuel_threshold removes safe zone
+		var fuel_actual := float(ld.fuel_units) / 60.0
+		if fuel_actual < float(cfg.low_fuel_threshold):
+			continue
 		var dx: float = x - ld.pos.x
 		var dz: float = z - ld.pos.z
 		if sqrt(dx * dx + dz * dz) <= cfg.safe_radius:
