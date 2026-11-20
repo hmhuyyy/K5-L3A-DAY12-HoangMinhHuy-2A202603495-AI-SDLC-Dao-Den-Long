@@ -64,10 +64,12 @@ func init(p_cfg: Config, seed: int, night_num: int, scenario: Dictionary) -> voi
 	paused = false
 	wind_active = false
 	wind_dir_deg = 0.0
-	_wind_next_warning_tick = WIND_WARNING_TICKS if _wind_enabled() else -1
-	_wind_next_active_tick = WIND_CYCLE_TICKS if _wind_enabled() else -1
 	_pulse_push_left.clear()
+	# world must be assigned BEFORE any _wind_enabled() / spawn-tick queries
 	world = WorldDefs.for_night(night)
+	# C5: first cycle — warning at tick 1680, active at tick 1800 (no wind in first 28 s)
+	_wind_next_warning_tick = (WIND_CYCLE_TICKS - WIND_WARNING_TICKS) if _wind_enabled() else -1
+	_wind_next_active_tick  = WIND_CYCLE_TICKS if _wind_enabled() else -1
 	if scenario.has("time_left_s"):
 		initial_time_left_s = float(scenario["time_left_s"])
 	else:

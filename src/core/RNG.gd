@@ -7,6 +7,7 @@ extends RefCounted
 var _rng := RandomNumberGenerator.new()
 var _mote_counter := 0
 var _shade_counter := 0
+var _drifter_counter := 0
 
 func seed_rng(s: int) -> void:
 	# Normalize seed: Godot RNG accepts any int; map negative/zero to positive range.
@@ -37,6 +38,11 @@ func next_shade_id() -> String:
 	_shade_counter += 1
 	return "S%d" % _shade_counter
 
+func next_drifter_id() -> String:
+	_drifter_counter += 1
+	return "D%d" % _drifter_counter
+
 func reset_counters() -> void:
 	_mote_counter = 0
 	_shade_counter = 0
+	_drifter_counter = 0

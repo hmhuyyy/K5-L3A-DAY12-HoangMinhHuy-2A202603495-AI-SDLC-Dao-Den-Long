@@ -59,8 +59,8 @@ static func run(args: Dictionary) -> int:
 		if snap_every > 0 and current_tick % snap_every == 0:
 			writer.write_record(sim.snapshot())
 
-		# Stop early on win/loss
-		if sim.state != "playing":
+		# Stop early on won/lost (not on paused)
+		if sim.state == "won" or sim.state == "lost":
 			break
 
 	# --- Mandatory end record (always last) ---
