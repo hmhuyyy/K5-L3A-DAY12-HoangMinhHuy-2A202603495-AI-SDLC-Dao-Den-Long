@@ -124,9 +124,70 @@ check "F11 end state=lost"           'tail -1 "$OUT/t_f11.jsonl" | grep -q "\"st
 
 # ── F20: snapshot cadence (tick 0 + every 10) ─────────────────────────
 run F20 "$OUT/t_f20.jsonl" --seed 1 --night 1 --ticks 30 --snapshot-every 10
-SNAPS=$(grep -c '"type":"snapshot"' "$OUT/t_f20.jsonl")
+SNAPS=$(grep -c '"type":"snapshot"' "$OUT/t_f20.jsonl" || true)
+SNAPS="${SNAPS:-0}"
 # Expect tick 0, 10, 20, 30 → 4 snapshots
 check "F20 snapshot cadence (4 snapshots in 30 ticks)" "[ \"$SNAPS\" -eq 4 ]"
+
+# ── F7: pulse stuns shades ───────────────────────────────────────────
+run F7 "$OUT/t_f7.jsonl" \
+  --seed 1 --night 1 --ticks 10 \
+  --scenario "$SC_WIN/f7.json" --inputs "$SC_WIN/f7_inputs.json" \
+  --snapshot-every 10
+check "F7 pulse event fires"        'grep -q "\"name\":\"pulse\""  "$OUT/t_f7.jsonl"'
+check "F7 shade state=stunned after pulse" \
+  'grep "\"type\":\"snapshot\"" "$OUT/t_f7.jsonl" | tail -1 | grep -q "\"state\":\"stunned\""'
+
+# ── F8: player_hit + drop ────────────────────────────────────────────
+run F8 "$OUT/t_f8.jsonl" \
+  --seed 1 --night 1 --ticks 10 \
+  --scenario "$SC_WIN/f8.json" \
+  --snapshot-every 10
+check "F8 player_hit event fires" 'grep -q "\"name\":\"player_hit\"" "$OUT/t_f8.jsonl"'
+check "F8 drop ratio applied"     'grep -q "\"dropped\":2"          "$OUT/t_f8.jsonl"'
+
+# ── F9: win all_lit ──────────────────────────────────────────────────
+run F9 "$OUT/t_f9.jsonl" \
+  --seed 1 --night 1 --ticks 5 \
+  --scenario "$SC_WIN/f9.json" --snapshot-every 5
+check "F9 game_over reason=all_lit" 'grep -q "\"reason\":\"all_lit\"" "$OUT/t_f9.jsonl"'
+check "F9 end state=won"            'tail -1 "$OUT/t_f9.jsonl" | grep -q "\"state\":\"won\""'
+
+# ── F10: loss no_flames ──────────────────────────────────────────────
+run F10 "$OUT/t_f10.jsonl" \
+  --seed 1 --night 1 --ticks 20 \
+  --scenario "$SC_WIN/f10.json" --snapshot-every 10
+check "F10 game_over reason=no_flames" 'grep -q "\"reason\":\"no_flames\"" "$OUT/t_f10.jsonl"'
+check "F10 end state=lost"             'tail -1 "$OUT/t_f10.jsonl" | grep -q "\"state\":\"lost\""'
+
+# ── F14: strictly increasing frame ticks → exit 2 ────────────────────
+run F14 "$OUT/t_f14.jsonl" \
+  --seed 1 --night 1 --ticks 5 \
+  --inputs "$SC_WIN/f14_bad_inputs.json"
+F14_CODE=$?
+check "F14 non-increasing ticks exit 2" "[ \"$F14_CODE\" -eq 2 ]"
+
+# ── F13: input persistence ──────────────────────────────────────────
+run F13 "$OUT/t_f13.jsonl" \
+  --seed 1 --night 1 --ticks 12 \
+  --scenario "$SC_WIN/f13.json" --inputs "$SC_WIN/f13_inputs.json" \
+  --snapshot-every 4
+# move [0,1] set at tick 0 → by tick 4 player must have moved in Z
+# Second snapshot is tick 4; check player pos[0] or pos[2] > 0
+SNAP2_PLAYER=$(grep '"type":"snapshot"' "$OUT/t_f13.jsonl" | sed -n '2p' | grep -o '"player":{[^}]*}')
+check "F13 move persisted (player moved by tick 4)" '[ -n "$SNAP2_PLAYER" ] && echo "$SNAP2_PLAYER" | grep -qv '"'"'"pos":\[0.0,0.0,0.0\]'"'"''
+
+# ── F19: jump trajectory ─────────────────────────────────────────────
+run F19 "$OUT/t_f19.jsonl" \
+  --seed 1 --night 1 --ticks 60 \
+  --scenario "$SC_WIN/f19.json" --inputs "$SC_WIN/f19_inputs.json" \
+  --snapshot-every 12
+# Player Y must rise above 0 mid-jump then return to 0
+Y_PEAK=$(grep '"type":"snapshot"' "$OUT/t_f19.jsonl" | grep -o '"player":{[^}]*}' | grep -o '"pos":\[[^]]*\]' | awk -F',' '{print $2}' | sort -rn | head -1)
+check "F19 jump rose above 0" '[ -n "$Y_PEAK" ] && awk "BEGIN{exit !($Y_PEAK > 1.0)}"'
+# Final snapshot Y should be 0 (landed)
+Y_END=$(grep '"type":"snapshot"' "$OUT/t_f19.jsonl" | grep -o '"player":{[^}]*}' | tail -1 | grep -o '"pos":\[[^]]*\]' | awk -F',' '{print $2}')
+check "F19 player lands back at Y=0" '[ -n "$Y_END" ] && awk "BEGIN{exit !($Y_END < 0.01)}"'
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
