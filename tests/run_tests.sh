@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# run_tests.sh — Phase 1 scenario tests. Exits non-zero on any failure.
+set -uo pipefail
+
+GODOT="${GODOT_BIN:-C:/Tools/Godot/Godot_v4.7.2-stable_win64_console.exe}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Godot FileAccess needs Windows-style paths (c:/...), not POSIX (/c/...).
+ROOT_WIN="$(echo "$ROOT" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
+OUT="$ROOT/out"
+OUT_WIN="$ROOT_WIN/out"
+SC="$ROOT/tests/scenarios"
+SC_WIN="$ROOT_WIN/tests/scenarios"
+mkdir -p "$OUT"
+
+PASS=0
+FAIL=0
+
+# run <label> <posix_out_path> [extra godot args...]
+# --out receives a Windows path so Godot FileAccess can create the file.
+run() {
+	local label="$1" posix_out="$2"
+	shift 2
+	local win_out
+	win_out="$(echo "$posix_out" | sed 's|^/\([a-zA-Z]\)/|\1:/|')"
+	"$GODOT" --headless --path "$ROOT_WIN" --script res://src/headless.gd -- "$@" --out "$win_out" 2>/dev/null
+	return $?
+}
+
+check() {
+	if eval "$2"; then
+		echo "PASS  $1"
+		PASS=$((PASS+1))
+	else
+		echo "FAIL  $1"
+		FAIL=$((FAIL+1))
+	fi
+}
+
+# ── F1: tick-0 snapshot, 5 lanterns, score 0 ──────────────────────────
+run F1 "$OUT/t_f1.jsonl" --seed 1 --night 1 --ticks 0
+L1=$(grep -o '"id":"L[0-9]"' "$OUT/t_f1.jsonl" | wc -l)
+check "F1 5 lanterns in tick-0" "[ \"$L1\" -eq 5 ]"
+check "F1 score=0 at tick0"     'head -1 "$OUT/t_f1.jsonl" | grep -q "\"score\":0"'
+check "F1 2 lines total (snapshot+end)" "[ \"$(wc -l < "$OUT/t_f1.jsonl")\" -eq 2 ]"
+
+# ── F2: determinism ────────────────────────────────────────────────────
+run F2a "$OUT/t_det1.jsonl" --seed 42 --night 1 --ticks 600
+run F2b "$OUT/t_det2.jsonl" --seed 42 --night 1 --ticks 600
+check "F2 determinism (byte-identical)" 'diff -q "$OUT/t_det1.jsonl" "$OUT/t_det2.jsonl" >/dev/null'
+
+# ── F3: mote pickup ────────────────────────────────────────────────────
+run F3 "$OUT/t_f3.jsonl" \
+  --seed 1 --night 1 --ticks 10 \
+  --scenario "$SC_WIN/f3.json" --inputs "$SC_WIN/f3_inputs.json" \
+  --snapshot-every 5
+check "F3 mote_picked fires" 'grep -q "\"name\":\"mote_picked\"" "$OUT/t_f3.jsonl"'
+MC=$(grep -c '"name":"mote_picked"' "$OUT/t_f3.jsonl" || echo 0)
+check "F3 exactly 1 mote_picked" "[ \"$MC\" -eq 1 ]"
+
+# ── F4: deposit + lantern_lit ─────────────────────────────────────────
+run F4 "$OUT/t_f4.jsonl" \
+  --seed 1 --night 1 --ticks 5 \
+  --scenario "$SC_WIN/f4.json" --inputs "$SC_WIN/f4_inputs.json" \
+  --snapshot-every 5
+check "F4 deposit fires"     'grep -q "\"name\":\"deposit\""     "$OUT/t_f4.jsonl"'
+check "F4 lantern_lit fires" 'grep -q "\"name\":\"lantern_lit\"" "$OUT/t_f4.jsonl"'
+
+# ── F5: shade chases player ────────────────────────────────────────────
+run F5 "$OUT/t_f5.jsonl" \
+  --seed 1 --night 1 --ticks 60 \
+  --scenario "$SC_WIN/f5.json" --snapshot-every 20
+# shade S1 starts at x=20; first snapshot should show x=20.0
+check "F5 shade S1 starts at x=20" \
+  'grep "\"type\":\"snapshot\"" "$OUT/t_f5.jsonl" | head -1 | grep -q "\"id\":\"S1\""'
+# After 20 ticks it should be closer (x < 20)
+S1_X=$(grep '"type":"snapshot"' "$OUT/t_f5.jsonl" | tail -1 | grep -o '"id":"S1","pos":\[[0-9.-]*' | grep -o '[0-9.-]*$')
+check "F5 shade moved closer after 60 ticks" '[ -n "$S1_X" ] && awk "BEGIN{exit !($S1_X < 20)}"'
+
+# ── F6: safe-radius – shade near lit lantern stays outside ─────────────
+run F6 "$OUT/t_f6.jsonl" \
+  --seed 1 --night 1 --ticks 60 \
+  --scenario "$SC_WIN/f6.json" --snapshot-every 20
+# shade S1 starts at x=5, lantern L1 lit at origin, safe_radius=4
+# shade must never be within 4 m of origin
+check "F6 shade never enters safe zone" \
+  '! grep "\"id\":\"S1\"" "$OUT/t_f6.jsonl" | grep -v "\"state\"" | awk -F"\"pos\":" "{print \$2}" | awk -F"," "{dist=\$1+0; if(dist<0)dist=-dist; if(dist<=4){found=1}} END{exit !found}"'
+
+# ── F12: no events during scenario setup ──────────────────────────────
+run F12 "$OUT/t_f12.jsonl" \
+  --seed 1 --night 1 --ticks 0 \
+  --scenario "$SC_WIN/f12.json"
+EV=$(grep -c '"type":"event"' "$OUT/t_f12.jsonl" 2>/dev/null || true)
+EV="${EV:-0}"
+check "F12 no events at setup"      "[ \"$EV\" -eq 0 ]"
+check "F12 score=0 with lit lantern" 'head -1 "$OUT/t_f12.jsonl" | grep -q "\"score\":0"'
+
+# ── F14/F15: bad JSON inputs / scenario → exit 2 ──────────────────────
+echo "{not valid json" > "$SC/f15_bad.json"
+run F15 "$OUT/t_f15.jsonl" \
+  --seed 1 --night 1 --ticks 1 \
+  --scenario "$SC_WIN/f15_bad.json"
+F15_CODE=$?
+check "F15 invalid scenario exits 2" "[ \"$F15_CODE\" -eq 2 ]"
+
+# ── F16: tick-limit end record state=playing ──────────────────────────
+run F16 "$OUT/t_f16.jsonl" \
+  --seed 1 --night 1 --ticks 30
+check "F16 end record present"       'tail -1 "$OUT/t_f16.jsonl" | grep -q "\"type\":\"end\""'
+check "F16 end state=playing"        'tail -1 "$OUT/t_f16.jsonl" | grep -q "\"state\":\"playing\""'
+check "F16 end ticks=30"             'tail -1 "$OUT/t_f16.jsonl" | grep -q "\"ticks\":30"'
+
+# ── F21: zero-tick = exactly 2 lines ──────────────────────────────────
+run F21 "$OUT/t_f21.jsonl" --seed 1 --night 1 --ticks 0
+LN=$(wc -l < "$OUT/t_f21.jsonl")
+check "F21 zero-tick = 2 lines"       "[ \"$LN\" -eq 2 ]"
+check "F21 no events in zero-tick"    '! grep -q "\"type\":\"event\"" "$OUT/t_f21.jsonl"'
+
+# ── F11: dawn loss via short time_left_s in scenario ──────────────────
+run F11 "$OUT/t_f11.jsonl" \
+  --seed 1 --night 1 --ticks 70 \
+  --scenario "$SC_WIN/f11.json" --snapshot-every 30
+check "F11 game_over reason=dawn"    'grep -q "\"reason\":\"dawn\""   "$OUT/t_f11.jsonl"'
+check "F11 end state=lost"           'tail -1 "$OUT/t_f11.jsonl" | grep -q "\"state\":\"lost\""'
+
+# ── F20: snapshot cadence (tick 0 + every 10) ─────────────────────────
+run F20 "$OUT/t_f20.jsonl" --seed 1 --night 1 --ticks 30 --snapshot-every 10
+SNAPS=$(grep -c '"type":"snapshot"' "$OUT/t_f20.jsonl")
+# Expect tick 0, 10, 20, 30 → 4 snapshots
+check "F20 snapshot cadence (4 snapshots in 30 ticks)" "[ \"$SNAPS\" -eq 4 ]"
+
+echo ""
+echo "Results: $PASS passed, $FAIL failed"
+[ $FAIL -eq 0 ] && exit 0 || exit 1

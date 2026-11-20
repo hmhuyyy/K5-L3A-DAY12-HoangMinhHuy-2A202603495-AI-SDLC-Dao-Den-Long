@@ -1,0 +1,10 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Test output (generated, not committed)
+out/
+
+# Local analysis files
+analysis.html
+plan.html
