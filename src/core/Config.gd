@@ -86,26 +86,26 @@ var wind_warning_ticks: int      # 120 (2 s before active) [REQ + DECIDE C5]
 var wind_active_ticks: int       # 300 (5 s) [REQ TICKET-02]
 var wind_speed: float            # 2.0 m/s   [REQ TICKET-02]
 
-# ── Score ────────────────────────────────────────────────────
-# Canonical names from game.contract.json score object.
-# Semantics: per_mote = per DEPOSITED mote (not pickup). [REQ TICKET-02 L67]
-var score_per_mote: int          # 10 — awarded on deposit, not pickup
-var score_per_lantern: int       # 100
-var score_per_stun: int          # 5 per shade hit by pulse
-var score_per_second_left: int   # 2 — applied as floor(time_left_s) * this
-var score_per_flame_left: int    # 50
+# ── Lantern fuel (TICKET-03 v1.2) ────────────────────────────
+var fuel_max: int                 # 100       [REQ TICKET-03]
+var fuel_decay_per_s: float      # 1.0       [REQ TICKET-03]
+var fuel_per_mote: int           # 10        [REQ TICKET-03]
+var relight_cost: int            # 5 motes   [REQ TICKET-03]
+var win_ratio: float             # 0.6       [REQ TICKET-03]
+var drain_per_s: float           # 5         [REQ TICKET-03]
+var low_fuel_threshold: int      # 30        [REQ TICKET-03]
+var capacity_max: int            # 20        [REQ TICKET-03]
+var shade_drain_radius: float    # 2.0 m XZ  [REQ TICKET-03]
 
-# ── Phase-1 compatibility aliases (temporary until GameSim is rewritten) ──
-# GameSim Phase 1 references these names directly. These properties derive
-# from the v1.1 canonical fields above. Remove when GameSim is updated.
-var score_per_mote_deposited: int:  # alias → score_per_mote
-	get: return score_per_mote
-var pulse_stun_s: float:            # alias → pulse_stun_ticks / 60.0
-	get: return pulse_stun_ticks / 60.0
-var invuln_s: float:                # alias → invuln_ticks / 60.0
-	get: return invuln_ticks / 60.0
-var score_per_second_left_x2: int:  # alias → score_per_second_left
-	get: return score_per_second_left
+# ── Score ────────────────────────────────────────────────────
+# Canonical names from game.contract.json score object (v1.2).
+var score_per_mote: int          # 5 per mote deposited (light, relight, refuel)
+var score_per_lantern: int       # 100 first light
+var score_per_relight: int       # 40 relight
+var score_per_stun: int          # 5 pulse hit on normal shade
+var score_per_stun_drain: int    # 15 pulse hit on draining shade
+var score_per_lantern_at_dawn: int  # 50 per lit lantern at dawn win
+var score_per_flame_left: int    # 50 per flame at dawn win
 
 # raw contract fields
 var contract_version: String
@@ -113,7 +113,9 @@ var team: String
 
 # ── Required tuning keys (must be present in v1.1 contract) ──────────────
 const _REQUIRED_TUNING: Array[String] = [
-	"player_speed", "player_accel_s", "carry_capacity", "lantern_cost",
+	"player_speed", "player_accel_s", "carry_capacity", "capacity_max", "lantern_cost",
+	"relight_cost", "fuel_max", "fuel_decay_per_s", "fuel_per_mote",
+	"low_fuel_threshold", "drain_per_s", "win_ratio", "shade_drain_radius",
 	"lantern_count_night1", "pickup_radius", "pickup_height_m", "interact_radius",
 	"pulse_cost", "pulse_radius", "pulse_center_height_m", "pulse_stun_ticks",
 	"pulse_push_m", "pulse_push_ticks", "pulse_cooldown_s",
@@ -133,7 +135,8 @@ const _REQUIRED_TUNING: Array[String] = [
 	"wind_cycle_ticks", "wind_warning_ticks", "wind_active_ticks", "wind_speed",
 ]
 const _REQUIRED_SCORE: Array[String] = [
-	"per_mote", "per_lantern", "per_stun", "per_second_left", "per_flame_left",
+	"per_mote", "per_lantern", "per_relight", "per_stun", "per_stun_drain",
+	"per_lantern_at_dawn", "per_flame_left",
 ]
 
 # ── type specs: field_name -> ("float" | "int" | "bool") ──────────────────
@@ -146,9 +149,12 @@ const _TYPE_SPECS: Dictionary = {
 	"carry_capacity": "int", "pickup_radius": "float", "pickup_height_m": "float",
 	"mote_initial_count": "int", "mote_cap": "int", "mote_spawn_interval_ticks": "int",
 	"mote_drop_ttl_ticks": "int", "mote_drop_ring_min_m": "float", "mote_drop_ring_max_m": "float",
-	# Lantern (mixed)
+	# Lantern + fuel (mixed)
 	"lantern_cost": "int", "lantern_count_night1": "int",
 	"interact_radius": "float", "safe_radius": "float", "safe_push_ticks": "int",
+	"relight_cost": "int", "fuel_max": "int", "fuel_decay_per_s": "float",
+	"fuel_per_mote": "int", "low_fuel_threshold": "int", "drain_per_s": "float",
+	"win_ratio": "float", "shade_drain_radius": "float", "capacity_max": "int",
 	# Pulse (mixed)
 	"pulse_cost": "int", "pulse_radius": "float", "pulse_center_height_m": "float",
 	"pulse_stun_ticks": "int", "pulse_push_m": "float", "pulse_push_ticks": "int",
@@ -245,13 +251,13 @@ static func load_from_file(path: String) -> Config:
 		push_error("Config: root must be dict, got %s" % typeof(d))
 		return null
 
-	# Validate contract version — must be exactly "1.1" (type String)
+	# Validate contract version — must be "1.1" or "1.2"
 	var ver: Variant = d.get("contract_version", null)
 	if not (ver is String):
 		push_error("Config: contract_version must be String, got %s" % typeof(ver))
 		return null
-	if ver != "1.1":
-		push_error("Config: contract_version must be '1.1', got '%s'" % ver)
+	if ver != "1.1" and ver != "1.2":
+		push_error("Config: contract_version must be '1.1' or '1.2', got '%s'" % ver)
 		return null
 
 	var t: Variant = d.get("tuning", null)
@@ -349,6 +355,16 @@ static func load_from_file(path: String) -> Config:
 			"wind_warning_ticks": c.wind_warning_ticks = coerced
 			"wind_active_ticks": c.wind_active_ticks = coerced
 			"wind_speed": c.wind_speed = coerced
+			# Fuel/lantern (v1.2)
+			"capacity_max": c.capacity_max = coerced
+			"relight_cost": c.relight_cost = coerced
+			"fuel_max": c.fuel_max = coerced
+			"fuel_decay_per_s": c.fuel_decay_per_s = coerced
+			"fuel_per_mote": c.fuel_per_mote = coerced
+			"low_fuel_threshold": c.low_fuel_threshold = coerced
+			"drain_per_s": c.drain_per_s = coerced
+			"win_ratio": c.win_ratio = coerced
+			"shade_drain_radius": c.shade_drain_radius = coerced
 
 	# Score — validate and load
 	for key: String in _REQUIRED_SCORE:
@@ -360,8 +376,10 @@ static func load_from_file(path: String) -> Config:
 		match key:
 			"per_mote": c.score_per_mote = coerced
 			"per_lantern": c.score_per_lantern = coerced
+			"per_relight": c.score_per_relight = coerced
 			"per_stun": c.score_per_stun = coerced
-			"per_second_left": c.score_per_second_left = coerced
+			"per_stun_drain": c.score_per_stun_drain = coerced
+			"per_lantern_at_dawn": c.score_per_lantern_at_dawn = coerced
 			"per_flame_left": c.score_per_flame_left = coerced
 
 	return c

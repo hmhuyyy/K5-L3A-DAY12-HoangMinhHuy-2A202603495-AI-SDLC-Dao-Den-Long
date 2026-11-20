@@ -902,26 +902,31 @@ func _step_spawn_drifters(tick: int) -> void:
 
 # ── STEP 11: terminal conditions ─────────────────────────────
 func _check_terminal(tick: int) -> void:
-	# Priority: no_flames > all_lit > dawn
+	# TICKET-03: dawn survival replaces early all_lit win
+	# Priority: no_flames > dawn_survived > dawn
 	if player.flames <= 0:
 		state = "lost"
 		bus.record(tick, "game_over", {"result": "lost", "reason": "no_flames"})
 		return
-	var all_lit := true
-	for ld: Entities.LanternData in lanterns:
-		if not ld.lit:
-			all_lit = false
-			break
-	if all_lit:
-		# Win bonus: floor(s)×2 + 50×flames
-		score += floori(time_left_s()) * cfg.score_per_second_left
-		score += cfg.score_per_flame_left * player.flames
-		state = "won"
-		bus.record(tick, "game_over", {"result": "won", "reason": "all_lit"})
-		return
 	if time_left_s() <= 0.0:
-		state = "lost"
-		bus.record(tick, "game_over", {"result": "lost", "reason": "dawn"})
+		# Count lit lanterns at dawn tick
+		var lit_count := 0
+		for ld: Entities.LanternData in lanterns:
+			if ld.lit:
+				lit_count += 1
+		var required := ceili(cfg.win_ratio * lanterns.size())
+		if lit_count >= required:
+			# Dawn survival win: score per lit lantern (fuel) + flames
+			for ld: Entities.LanternData in lanterns:
+				if ld.lit:
+					var fuel_now := float(ld.fuel_units) / 60.0
+					score += cfg.score_per_lantern_at_dawn + floori(fuel_now)
+			score += cfg.score_per_flame_left * player.flames
+			state = "won"
+			bus.record(tick, "game_over", {"result": "won", "reason": "dawn_survived"})
+		else:
+			state = "lost"
+			bus.record(tick, "game_over", {"result": "lost", "reason": "dawn"})
 
 # ── Snapshot ──────────────────────────────────────────────────
 func snapshot() -> Dictionary:

@@ -146,12 +146,12 @@ run F8 "$OUT/t_f8.jsonl" \
 check "F8 player_hit event fires" 'grep -q "\"name\":\"player_hit\"" "$OUT/t_f8.jsonl"'
 check "F8 drop ratio applied"     'grep -q "\"dropped\":2"          "$OUT/t_f8.jsonl"'
 
-# ── F9: win all_lit ──────────────────────────────────────────────────
+# ── F9: win dawn_survived (TICKET-03: all lit + time_left_s=1 → dawn_survived) ─
 run F9 "$OUT/t_f9.jsonl" \
-  --seed 1 --night 1 --ticks 5 \
-  --scenario "$SC_WIN/f9.json" --snapshot-every 5
-check "F9 game_over reason=all_lit" 'grep -q "\"reason\":\"all_lit\"" "$OUT/t_f9.jsonl"'
-check "F9 end state=won"            'tail -1 "$OUT/t_f9.jsonl" | grep -q "\"state\":\"won\""'
+  --seed 1 --night 1 --ticks 65 \
+  --scenario "$SC_WIN/f9.json" --snapshot-every 30
+check "F9 game_over reason=dawn_survived" 'grep -q "\"reason\":\"dawn_survived\"" "$OUT/t_f9.jsonl"'
+check "F9 end state=won"                  'tail -1 "$OUT/t_f9.jsonl" | grep -q "\"state\":\"won\""'
 
 # ── F10: loss no_flames ──────────────────────────────────────────────
 run F10 "$OUT/t_f10.jsonl" \

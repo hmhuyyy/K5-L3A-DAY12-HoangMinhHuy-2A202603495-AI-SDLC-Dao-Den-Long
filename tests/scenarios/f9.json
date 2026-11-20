@@ -8,5 +8,6 @@
     {"id":"L3","pos":[0,0,6],"lit":true},
     {"id":"L4","pos":[0,0,8],"lit":true},
     {"id":"L5","pos":[0,0,10],"lit":true}
-  ]
+  ],
+  "time_left_s": 1
 }
