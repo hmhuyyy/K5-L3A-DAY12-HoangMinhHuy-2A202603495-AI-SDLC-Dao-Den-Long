@@ -89,6 +89,73 @@ func init(p_cfg: Config, seed: int, night_num: int, scenario: Dictionary) -> voi
 func _wind_enabled() -> bool:
 	return bool(world.get("wind_enabled", false))
 
+# ── Benchmark workload (TICKET-04 §3.1) ───────────────────────
+# Night 1, exactly 200 wander shades and 100 motes spread uniformly over the island
+# (deterministic from the seed), L1–L3 lit with fuel 100, no player input, player at origin.
+# Only used by the benchmark scene; never reachable from the headless pipeline.
+var bench_mode: bool = false
+const BENCH_SHADES := 200
+const BENCH_MOTES := 100
+const BENCH_ISLAND_R := 38.0
+
+func init_bench(p_cfg: Config, seed_v: int) -> void:
+	var sc := {
+		"random_motes": false, "random_shades": false,
+		"player": {"pos": [0.0, 0.0, 0.0]},
+		"lanterns": [
+			{"id": "L1", "lit": true, "fuel": 100},
+			{"id": "L2", "lit": true, "fuel": 100},
+			{"id": "L3", "lit": true, "fuel": 100},
+		],
+	}
+	init(p_cfg, seed_v, 1, sc)
+	bus.drain()
+	while shades.size() < BENCH_SHADES:
+		var p := _bench_point()
+		if _in_any_safe_zone(p.x, p.z):
+			continue
+		var near_unlit := false
+		for ld: Entities.LanternData in lanterns:
+			if not ld.lit and _xz_dist(p, ld.pos) <= cfg.shade_drain_radius + 0.5:
+				near_unlit = true
+		if near_unlit:
+			continue
+		var sd := Entities.ShadeData.new()
+		sd.id = rng.next_shade_id()
+		sd.pos = p
+		sd.state = Entities.SHADE_WANDER
+		shades.append(sd)
+	while motes.size() < BENCH_MOTES:
+		var md := Entities.MoteData.new()
+		md.id = rng.next_mote_id()
+		md.pos = _bench_point()
+		md.kind = Entities.MOTE_RANDOM
+		motes.append(md)
+	bench_mode = true
+
+# Uniform over the disc of radius BENCH_ISLAND_R (area-uniform): r = R * sqrt(u).
+func _bench_point() -> Vector3:
+	var r := BENCH_ISLAND_R * sqrt(rng.randf())
+	var a := rng.randf() * TAU
+	return Vector3(r * cos(a), 0.0, r * sin(a))
+
+# Moves all 200 benchmark shades in deterministic wander patrols across the island.
+func _step_bench_shades() -> void:
+	var speed := cfg.night_shade_speed(night)
+	var step := speed * DT
+	for i in range(shades.size()):
+		var sd: Entities.ShadeData = shades[i]
+		sd.state = Entities.SHADE_WANDER
+		var heading := float(i) * 0.6180339887 * TAU + float(sim_tick) * 0.015
+		var nx := sd.pos.x + cos(heading) * step
+		var nz := sd.pos.z + sin(heading) * step
+		if nx * nx + nz * nz > BENCH_ISLAND_R * BENCH_ISLAND_R or _in_any_safe_zone(nx, nz):
+			heading += PI
+			nx = sd.pos.x + cos(heading) * step
+			nz = sd.pos.z + sin(heading) * step
+		sd.pos.x = nx
+		sd.pos.z = nz
+
 # Lanterns that must be lit at dawn: ceil(win_ratio * total). The epsilon guards
 # against float noise such as 0.6 * 5 = 3.0000000000000004.
 func required_lit() -> int:
@@ -262,6 +329,12 @@ func tick(input_state: InputState) -> EventBus:
 		return bus
 
 	# STEP 1: Read input; handle pause FIRST. If just paused, stop step here.
+	if bench_mode:
+		# Benchmark workload (TICKET-04 §3.1): all 200 shades stay in wander state and move
+		# across the island; spawn, damage, pickup, fuel decay and terminal are disabled.
+		_step_bench_shades()
+		sim_tick += 1
+		return bus
 	if input_state != null and input_state.pause_edge():
 		if paused:
 			paused = false
