@@ -41,6 +41,7 @@ class PlayerData extends RefCounted:
 	var fall_wait_ticks: int = 0          # ticks remaining before respawn
 	# Bounce pad ballistic lock
 	var ballistic: bool = false            # true = horizontal vel locked from pad
+	var _ballistic_hvel: Vector2 = Vector2.ZERO  # horizontal vel from pad
 	# Facing direction (for dash when idle)
 	var facing: Vector2 = Vector2(0.0, 1.0)  # default +Z
 	# Phase 3: successful lights (capacity growth)

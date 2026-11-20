@@ -2,5 +2,5 @@
   "player": {"pos":[0,0,0], "carried":0, "flames":3},
   "random_motes": false,
   "random_shades": false,
-  "shades": [{"id":"S1","pos":[20,0,0]}]
+  "shades": [{"id":"S1","pos":[14,0,0],"state":"chase"}]
 }
