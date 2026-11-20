@@ -320,16 +320,28 @@ func _step_counters() -> void:
 			c.respawn_ticks_left -= 1
 			if c.respawn_ticks_left <= 0:
 				c.available = true
-	# Fuel decay: each lit lantern loses 1 fuel_unit per tick (= 1/60 s)
-	# Shade drain adds units separately; handled in _step_shades
+	# Fuel decay + shade drain counter tracking (per tick, per lantern)
+	# Drain counter: track ticks since last fuel_drain event per shade
 	for ld: Entities.LanternData in lanterns:
-		if ld.lit and ld.fuel_units > 0:
-			ld.fuel_units -= 1
-			if ld.fuel_units <= 0:
-				ld.fuel_units = 0
-				ld.lit = false
-				ld.deposited = 0
-				ld.ever_lit = true
+		if not ld.lit:
+			continue
+		if ld.fuel_units <= 0:
+			continue
+		# Base decay: 1 unit/tick
+		ld.fuel_units -= 1
+		# Extra drain from draining shades (5 fuel/s = 5/60 units/tick per shade)
+		for sd: Entities.ShadeData in shades:
+			if sd.state == Entities.SHADE_DRAIN and sd.target_lantern_id == ld.id:
+				var drain_units := int(cfg.drain_per_s)  # drain_per_s = 5 → 5 units/tick
+				ld.fuel_units -= drain_units
+		if ld.fuel_units <= 0:
+			ld.fuel_units = 0
+			ld.lit = false
+			ld.deposited = 0
+			ld.ever_lit = true
+			# lantern_out event emitted in _step_shades after counters (via post check)
+			# Using bus directly here since this is step 2
+			bus.record(executed_ticks + 1, "lantern_out", {"lantern_id": ld.id})
 
 # ── STEP 3: player movement (jump, dash, bounce, wind, air control) ──
 func _step_player_move(inp: InputState, tick: int) -> void:
@@ -632,13 +644,17 @@ func _step_pulse(inp: InputState, tick: int) -> void:
 		var dz: float = center.z - sd.pos.z
 		var d: float = sqrt(dx * dx + dy * dy + dz * dz)
 		if d <= cfg.pulse_radius:
-			# Stun: 120 ticks; stunned overrides recoil
+			# Stun: 120 ticks; stunned overrides recoil/drain
 			sd.previous_state = sd.state if sd.state != Entities.SHADE_STUNNED else sd.previous_state
 			sd.state = Entities.SHADE_STUNNED
 			sd.state_ticks_left = cfg.pulse_stun_ticks
 			# Push: start push animation, 4m over 15 ticks
 			_pulse_push_left[sd.id] = cfg.pulse_push_ticks
-			score += cfg.score_per_stun
+			# Score: +15 if was draining, +5 otherwise
+			if sd.previous_state == Entities.SHADE_DRAIN:
+				score += cfg.score_per_stun_drain
+			else:
+				score += cfg.score_per_stun
 			stunned_ids.append(sd.id)
 			# Drifter hit by pulse
 	for dr: Entities.DrifterData in drifters:
@@ -702,7 +718,6 @@ func _step_shade_one(sd: Entities.ShadeData, tick: int) -> void:
 	if sd.state == Entities.SHADE_STUNNED:
 		return  # no movement while stunned
 	if sd.state == Entities.SHADE_RECOIL:
-		# Recoil: move 2m away from player over 60 ticks
 		var dx: float = sd.pos.x - player.pos.x
 		var dz: float = sd.pos.z - player.pos.z
 		var d := sqrt(dx * dx + dz * dz)
@@ -711,7 +726,67 @@ func _step_shade_one(sd: Entities.ShadeData, tick: int) -> void:
 			sd.pos.x += (dx / d) * step
 			sd.pos.z += (dz / d) * step
 		return
-	# wander or chase: compute distance to player
+
+	# ── TICKET-03: wander → find weak lantern or drain ───────────
+	if sd.state == Entities.SHADE_WANDER:
+		# Check if a weak (lit, fuel<30) lantern is nearby — if so, target it
+		var weak_target := _find_weak_lantern_for_shade()
+		if weak_target != null and sd.target_lantern_id.is_empty():
+			sd.target_lantern_id = weak_target.id
+		elif sd.target_lantern_id.is_empty():
+			# Normal wander: stand still (B12)
+			return
+		# If we have a target, move toward it
+		if not sd.target_lantern_id.is_empty():
+			var target_ld := _find_lantern_by_id(sd.target_lantern_id)
+			if target_ld == null or not target_ld.lit or target_ld.fuel_units == 0:
+				# Target gone or extinguished
+				sd.target_lantern_id = ""
+				return
+			var dx: float = target_ld.pos.x - sd.pos.x
+			var dz: float = target_ld.pos.z - sd.pos.z
+			var dist := sqrt(dx * dx + dz * dz)
+			if dist <= cfg.shade_drain_radius:
+				# Enter drain: shade is on the lantern
+				sd.state = Entities.SHADE_DRAIN
+				sd.previous_state = Entities.SHADE_WANDER
+			else:
+				var speed := cfg.night_shade_speed(night)
+				var step := speed * DT
+				sd.pos.x += (dx / dist) * step
+				sd.pos.z += (dz / dist) * step
+		return
+
+	if sd.state == Entities.SHADE_DRAIN:
+		# Drain: stand still; draining handled in step_counters (1 unit/tick per shade)
+		# Check exit conditions
+		var target_ld := _find_lantern_by_id(sd.target_lantern_id)
+		var dxp: float = player.pos.x - sd.pos.x
+		var dzp: float = player.pos.z - sd.pos.z
+		var dist_to_player := sqrt(dxp * dxp + dzp * dzp)
+		if dist_to_player <= cfg.shade_detect_m:
+			# Player in range → chase
+			sd.state = Entities.SHADE_CHASE
+			sd.target_lantern_id = ""
+			return
+		if target_ld == null or not target_ld.lit or target_ld.fuel_units == 0:
+			sd.state = Entities.SHADE_WANDER
+			sd.target_lantern_id = ""
+			return
+		var fuel_actual := float(target_ld.fuel_units) / 60.0
+		if fuel_actual >= float(cfg.low_fuel_threshold):
+			# Lantern refueled above threshold → wander
+			sd.state = Entities.SHADE_WANDER
+			sd.target_lantern_id = ""
+			return
+		var dx_target: float = target_ld.pos.x - sd.pos.x
+		var dz_target: float = target_ld.pos.z - sd.pos.z
+		if sqrt(dx_target * dx_target + dz_target * dz_target) > cfg.shade_drain_radius:
+			sd.state = Entities.SHADE_WANDER
+			sd.target_lantern_id = ""
+		return
+
+	# wander ↔ chase: compute distance to player
 	var dxp: float = player.pos.x - sd.pos.x
 	var dzp: float = player.pos.z - sd.pos.z
 	var dist := sqrt(dxp * dxp + dzp * dzp)
@@ -722,7 +797,6 @@ func _step_shade_one(sd: Entities.ShadeData, tick: int) -> void:
 		sd.state = Entities.SHADE_WANDER
 	# Movement
 	if sd.state == Entities.SHADE_CHASE:
-		# Move toward player, respecting safe zones
 		var speed := cfg.night_shade_speed(night)
 		var step := speed * DT
 		if dist > 0.001:
@@ -733,13 +807,38 @@ func _step_shade_one(sd: Entities.ShadeData, tick: int) -> void:
 			if not _in_any_safe_zone(nx_pos, nz_pos):
 				sd.pos.x = nx_pos
 				sd.pos.z = nz_pos
-	# wander: stand still (B12)
+	# wander without target: stand still (B12)
 
 func _find_shade(id: String) -> Entities.ShadeData:
 	for sd: Entities.ShadeData in shades:
 		if sd.id == id:
 			return sd
 	return null
+
+func _find_lantern_by_id(id: String) -> Entities.LanternData:
+	for ld: Entities.LanternData in lanterns:
+		if ld.id == id:
+			return ld
+	return null
+
+# TICKET-03 §4: find nearest lit lantern with fuel < low_fuel_threshold for drain targeting.
+# Only called for wander shades (not chase). Tie-break by id ascending.
+func _find_weak_lantern_for_shade() -> Entities.LanternData:
+	var best: Entities.LanternData = null
+	var best_dist := INF
+	for ld: Entities.LanternData in lanterns:
+		if not ld.lit:
+			continue
+		var fuel_actual := float(ld.fuel_units) / 60.0
+		if fuel_actual >= float(cfg.low_fuel_threshold):
+			continue
+		var dx: float = ld.pos.x - player.pos.x
+		var dz: float = ld.pos.z - player.pos.z
+		var d: float = sqrt(dx * dx + dz * dz)
+		if d < best_dist or (d == best_dist and ld.id < best.id):
+			best_dist = d
+			best = ld
+	return best
 
 func _in_any_safe_zone(x: float, z: float) -> bool:
 	for ld: Entities.LanternData in lanterns:
