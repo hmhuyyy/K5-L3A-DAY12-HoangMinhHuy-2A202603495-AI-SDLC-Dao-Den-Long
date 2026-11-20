@@ -1,0 +1,34 @@
+[gd_scene load_steps=3 format=3 uid="uid://b1gamescene00000"]
+
+[ext_resource type="Script" path="res://src/gameplay/GameScene.gd" id="1"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_1"]
+radius = 0.3
+height = 1.2
+
+[node name="GameScene" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Player3D" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="PlayerMesh" type="MeshInstance3D" parent="Player3D"]
+mesh = SubResource("CapsuleMesh_1")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.342020, 0, -0.342020, 0.939693, 0, 4, -6)
+
+[node name="Motes" type="Node3D" parent="."]
+
+[node name="Shades" type="Node3D" parent="."]
+
+[node name="Lanterns" type="Node3D" parent="."]
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="HUD"]
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 600.0
+offset_bottom = 40.0
+text = "Carried: 0   Flames: 3   Score: 0"
