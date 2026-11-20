@@ -3,6 +3,8 @@
 Game 3D góc nhìn thứ ba trong **Godot 4.7.2**. Mây — người giữ đèn nhỏ tuổi — gom đom đóm để thắp sáng, thắp lại và châm dầu cho các Đèn Lồng Lớn qua 3 Đêm (Đảo Bến, Đảo Cau, Đảo Chuông), chống lại Bóng Mực hút dầu và Gió Lạc, giữ tối thiểu 60% đèn sáng để sống sót đến **Bình Minh**.
 
 > **Release v1.0.0** · Test Contract **v1.3** · Tác giả: **Hoàng Minh Huy — 2A202603495**
+> 🎬 **Video Demo Gameplay (`.mp4`, `< 5 phút`):** [Xem / Tải từ GitHub Release v1.0.0](https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/download/v1.0.0/gameplay_demo.mp4) · [File trong repo (`docs/media/gameplay_demo.mp4`)](docs/media/gameplay_demo.mp4)
+> 📦 **Bản phát hành & Thực thi Windows (`v1.0.0`):** [GitHub Release v1.0.0 (`DaoDenLong-v1.0.0-win64.zip`)](https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long/releases/tag/v1.0.0)
 
 ![Gameplay Screenshot](docs/media/gameplay.png)
 
