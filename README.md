@@ -15,8 +15,8 @@ Game 3D góc nhìn thứ ba trong **Godot 4.7.2**. Mây — người giữ đèn
 git clone https://github.com/hmhuyyy/K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long.git
 cd K5-L3A-DAY12-HoangMinhHuy-2A202603495-AI-SDLC-Dao-Den-Long
 
-# 2. Chạy game 3D (có giao diện, 1280x720)
-godot --path .
+# 2. Khởi tạo class cache cho clone mới & chạy game 3D (1280x720)
+godot --headless --path . --import && godot --path .
 ```
 
 ---

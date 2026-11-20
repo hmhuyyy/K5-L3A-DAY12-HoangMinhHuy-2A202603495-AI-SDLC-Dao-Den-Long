@@ -13,6 +13,11 @@ SC="$ROOT/tests/scenarios"
 SC_WIN="$ROOT_WIN/tests/scenarios"
 mkdir -p "$OUT"
 
+# Ensure global script class cache is generated on a fresh clone without .godot/
+if [ ! -f "$ROOT/.godot/global_script_class_cache.cfg" ]; then
+	"$GODOT" --headless --path "$ROOT_WIN" --import >/dev/null 2>&1 || true
+fi
+
 PASS=0
 FAIL=0
 
