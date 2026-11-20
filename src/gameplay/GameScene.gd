@@ -208,7 +208,7 @@ func _process(delta: float) -> void:
 	_sync_visuals()
 	_update_hud()
 
-func _handle_sim_events(evs: Array[Dictionary]) -> void:
+func _handle_sim_events(evs: Array) -> void:
 	for ev: Dictionary in evs:
 		var ename: String = str(ev.get("name", ""))
 		match ename:
