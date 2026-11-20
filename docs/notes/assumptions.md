@@ -157,14 +157,16 @@ Phân biệt off-by-one: bước k → `current_tick = executed_ticks + 1`; sau 
 
 **[ASSUME-APPROVED B12]** Wander = đứng yên (TICKET không cho tốc độ wander).
 
-**[ASSUME-APPROVED B13]** State transitions:
+**[ASSUME-APPROVED B13]** State transitions with hysteresis and previous_state:
 - `spawning` (1 tick) → `wander`
-- `wander` → `chase` khi dist ≤ 12 m
-- `chase` → `wander` khi dist > 18 m (hysteresis)
-- `chase` → `recoil` khi gây hit (chạm player)
-- Thoát `recoil` → `chase` nếu dist ≤ 12, ngược lại `wander`; lưu `previous_state` để khôi phục
-- Bất kỳ → `stunned` khi pulse trúng; `stunned` ưu tiên hơn `recoil` **[ASSUME B16]**
-- Thoát `stunned` → theo dist (giống thoát recoil)
+- `wander` → `chase` khi dist ≤ detect_m (12 m); lưu previous_state = "wander"
+- `chase` → `wander` khi dist > abandon_m (18 m); lưu previous_state = "chase"
+- `chase` → `recoil` khi gây hit; lưu previous_state = "chase"
+- Thoát `recoil`: khôi phục hysteresis theo previous_state:
+  - previous = "chase" → tiếp tục chase cho đến khi dist > 18 m
+  - previous = "wander" → tiếp tục wander cho đến khi dist ≤ 12 m
+- Bất kỳ → `stunned` khi pulse trúng; lưu previous_state; `stunned` ưu tiên hơn `recoil`
+- Thoát `stunned`: giống thoát `recoil` — phục hồi hysteresis từ previous_state
 
 **[REQ]** Recoil: Shade lùi 2 m trong 60 tick (không phải player). **[ASSUME-APPROVED B16]** Hướng = ra xa player.
 
@@ -229,10 +231,4 @@ Tick tối đa per night: Đêm 1 = 18.000, Đêm 2 = 19.800, Đêm 3 = 21.600 (
 
 | ID | Vấn đề | Tác động |
 |---|---|---|
-| **OPEN-B15** | Tập điểm sương cho drifter spawn chưa được định nghĩa | Vị trí drifter lúc sinh deterministic |
-| **OPEN-wander** | Wander đứng yên là fallback; TICKET không xác nhận | Shade position test |
-| **OPEN-drifter-idle-omega** | 0.5°/tick giả định; TICKET không cho | Drifter position trong test |
-| **OPEN-bounce-tolerance** | Dung sai Y 0.5 m giả định | Bounce trigger test |
-| **OPEN-wind-dir-calm** | dir_deg=? khi calm (C2 chỉ nói "là số") | Wind snapshot test |
-| **OPEN-shade-night2-spawn** | 2 con tại tick 300 cho Đêm 2/3 (suy luận B10) | Shade count test |
-| **OPEN-stunned-prev-state** | Stunned exit: dùng dist hay lưu previous_state? | Shade state transition test |
+| **OPEN-B15** | Tập điểm sương cho drifter spawn chưa định nghĩa; WorldDefs phải cung cấp `mist_spawn_points` riêng | Vị trí drifter lúc sinh deterministic |

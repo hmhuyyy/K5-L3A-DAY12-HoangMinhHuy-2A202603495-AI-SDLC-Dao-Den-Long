@@ -57,7 +57,7 @@
     "drifter_speed_chase": 7.0,
     "drifter_speed_flee": 7.0,
     "drifter_detect_m": 15.0,
-    "drifter_steal_ticks": 3,
+    "drifter_steal_max_motes": 3,
     "drifter_steal_radius": 1.2,
     "drifter_flee_ticks": 240,
     "drifter_carried_min": 5,
@@ -66,24 +66,11 @@
     "wind_active_ticks": 300,
     "wind_speed": 2.0,
     "score": {
-      "per_mote_deposited": 10,
+      "per_mote": 10,
       "per_lantern": 100,
       "per_stun": 5,
-      "per_second_left_x2": 2,
+      "per_second_left": 2,
       "per_flame_left": 50
-    },
-    "fall_enabled_v1": false
-  },
-  "_notes": {
-    "score.per_mote_deposited": "REQ TICKET-02 L67: +10 each mote DEPOSITED (not picked); renamed from per_mote to prevent confusion",
-    "score.per_second_left_x2": "REQ TICKET-02 L67: +floor(seconds_left)*2; value is the multiplier 2",
-    "score.per_stun": "REQ TICKET-02 L67: +5 per shade hit by pulse (was 20 in v1.0)",
-    "fall_enabled_v1": "COMPAT: kept as false so Phase-1 regression tests that assume no fall still work when scenario overrides. Actual runtime uses fall_enabled:true",
-    "mote_initial_count_selection": "ASSUME B1: 8 inner (r=12) + 12 outer (r=33, 0deg to 247.5deg); Out13-Out16 start empty",
-    "wind_dir_deg_calm": "DECIDE C2: dir_deg is numeric; calm phase inferred from sim_tick, not from dir_deg==0",
-    "bounce_pad_tolerance_y": "ASSUME B6: 0.5m vertical tolerance for pad contact; use swept contact with pad_top_y",
-    "drifter_idle_omega": "ASSUME B14: heading rotates 0.5deg/tick giving circle R~3.82m; not a tuning constant",
-    "mist_spawn_points": "OPEN B15: drifter spawn uses mist_spawn_points which are NOT mote spawn points; WorldDefs must define these separately",
-    "air_control": "DECIDE C1: full air control; same accel/decel as ground; max 6m/s"
+    }
   }
 }
