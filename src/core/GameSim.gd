@@ -146,6 +146,18 @@ func _build_lanterns(s: Dictionary) -> void:
 				ld.deposited = int(p["deposited"])
 			if p.has("lit"):
 				ld.lit = bool(p["lit"])
+			if p.has("ever_lit"):
+				ld.ever_lit = bool(p["ever_lit"])
+			if p.has("relit_count"):
+				ld.relit_count = int(p["relit_count"])
+			# fuel: set from scenario or default for lit/unlit
+			if p.has("fuel"):
+				ld.fuel_units = int(float(p["fuel"]) * 60.0)
+			elif ld.lit:
+				ld.fuel_units = int(float(cfg.fuel_max) * 60.0)  # full when pre-lit, no score
+			# Ensure ever_lit is true if lit
+			if ld.lit:
+				ld.ever_lit = true
 		lanterns.append(ld)
 
 func _build_motes(s: Dictionary) -> void:
@@ -308,6 +320,16 @@ func _step_counters() -> void:
 			c.respawn_ticks_left -= 1
 			if c.respawn_ticks_left <= 0:
 				c.available = true
+	# Fuel decay: each lit lantern loses 1 fuel_unit per tick (= 1/60 s)
+	# Shade drain adds units separately; handled in _step_shades
+	for ld: Entities.LanternData in lanterns:
+		if ld.lit and ld.fuel_units > 0:
+			ld.fuel_units -= 1
+			if ld.fuel_units <= 0:
+				ld.fuel_units = 0
+				ld.lit = false
+				ld.deposited = 0
+				ld.ever_lit = true
 
 # ── STEP 3: player movement (jump, dash, bounce, wind, air control) ──
 func _step_player_move(inp: InputState, tick: int) -> void:
@@ -501,12 +523,20 @@ func _step_lantern_interact(inp: InputState, tick: int) -> void:
 		return
 	if player.falling:
 		return
-	# Find nearest lantern that can accept resources (unlit, or lit but not full fuel)
+	# TICKET-03: find nearest lantern that can accept resources:
+	#  - unlit, never lit (needs lantern_cost=10 motes to light)
+	#  - unlit, ever_lit (needs relight_cost=5 motes to relight)
+	#  - lit but fuel not full (can refuel)
 	var best: Entities.LanternData = null
 	var best_dist := INF
 	for ld: Entities.LanternData in lanterns:
-		if ld.lit:
-			continue  # Phase 2: lit = full; can't refuel (Phase 3 changes this)
+		var can_accept := false
+		if not ld.lit:
+			can_accept = true  # unlit: can light or relight
+		elif ld.fuel_units < int(cfg.fuel_max * 60):
+			can_accept = true  # lit but not full: can refuel
+		if not can_accept:
+			continue
 		var dx: float = player.pos.x - ld.pos.x
 		var dz: float = player.pos.z - ld.pos.z
 		var d: float = sqrt(dx * dx + dz * dz)
@@ -516,23 +546,72 @@ func _step_lantern_interact(inp: InputState, tick: int) -> void:
 				best = ld
 	if best == null or player.carried == 0:
 		return
-	var space := cfg.lantern_cost - best.deposited
-	var amount := mini(player.carried, space)
-	if amount <= 0:
-		return
-	player.carried -= amount
-	best.deposited += amount
-	# Phase 2: +5 per mote deposited
-	score += amount * cfg.score_per_mote
-	bus.record(tick, "deposit", {
-		"lantern_id": best.id,
-		"amount": amount,
-		"deposited": best.deposited
-	})
-	if best.deposited >= cfg.lantern_cost:
-		best.lit = true
-		bus.record(tick, "lantern_lit", {"lantern_id": best.id})
-		score += cfg.score_per_lantern
+
+	if not best.lit and not best.ever_lit:
+		# First light: needs lantern_cost motes
+		var cost := cfg.lantern_cost
+		var space := cost - best.deposited
+		var amount := mini(player.carried, space)
+		if amount <= 0:
+			return
+		player.carried -= amount
+		best.deposited += amount
+		score += amount * cfg.score_per_mote
+		bus.record(tick, "deposit", {
+			"lantern_id": best.id, "amount": amount, "deposited": best.deposited
+		})
+		if best.deposited >= cost:
+			best.lit = true
+			best.fuel_units = int(cfg.fuel_max * 60)
+			best.ever_lit = true
+			best.deposited = 0
+			player.successful_lights += 1
+			_update_capacity()
+			bus.record(tick, "lantern_lit", {"lantern_id": best.id, "relight": false})
+			score += cfg.score_per_lantern
+	elif not best.lit and best.ever_lit:
+		# Relight: needs relight_cost motes
+		var cost := cfg.relight_cost
+		var space := cost - best.deposited
+		var amount := mini(player.carried, space)
+		if amount <= 0:
+			return
+		player.carried -= amount
+		best.deposited += amount
+		score += amount * cfg.score_per_mote
+		bus.record(tick, "deposit", {
+			"lantern_id": best.id, "amount": amount, "deposited": best.deposited
+		})
+		if best.deposited >= cost:
+			best.lit = true
+			best.fuel_units = int(cfg.fuel_max * 60)
+			best.relit_count += 1
+			best.deposited = 0
+			player.successful_lights += 1
+			_update_capacity()
+			bus.record(tick, "lantern_lit", {"lantern_id": best.id, "relight": true})
+			score += cfg.score_per_relight
+	else:
+		# Refuel: lit but not full fuel
+		var fuel_now := float(best.fuel_units) / 60.0
+		var fuel_space := cfg.fuel_max - fuel_now
+		var used := mini(player.carried, ceili(fuel_space / float(cfg.fuel_per_mote)))
+		if used <= 0:
+			return
+		player.carried -= used
+		var fuel_add := used * cfg.fuel_per_mote
+		var new_fuel := minf(cfg.fuel_max, fuel_now + fuel_add)
+		best.fuel_units = int(new_fuel * 60.0)
+		score += used * cfg.score_per_mote
+		bus.record(tick, "refuel", {
+			"lantern_id": best.id, "amount": used, "fuel": _r1(new_fuel)
+		})
+
+func _update_capacity() -> void:
+	player.capacity = mini(cfg.capacity_max, 10 + 2 * player.successful_lights)
+
+static func _r1(x: float) -> float:
+	return round(x * 10.0) / 10.0
 
 # ── STEP 7: pulse ────────────────────────────────────────────
 func _step_pulse(inp: InputState, tick: int) -> void:
@@ -936,7 +1015,10 @@ func snapshot() -> Dictionary:
 			"id": ld.id,
 			"pos": _vec3(ld.pos),
 			"lit": ld.lit,
-			"deposited": ld.deposited
+			"deposited": ld.deposited,
+			"fuel": _r1(float(ld.fuel_units) / 60.0),
+			"ever_lit": ld.ever_lit,
+			"relit_count": ld.relit_count
 		})
 	var shade_arr: Array = []
 	for sd: Entities.ShadeData in shades:
@@ -989,6 +1071,7 @@ func snapshot() -> Dictionary:
 			"vel": _vec3(player.vel),
 			"flames": player.flames,
 			"carried": player.carried,
+			"capacity": player.capacity,
 			"grounded": player.grounded,
 			"invuln": player.invuln_ticks,
 			"dash_cd_s": _r3(player.dash_cd_ticks / TICK_RATE),
