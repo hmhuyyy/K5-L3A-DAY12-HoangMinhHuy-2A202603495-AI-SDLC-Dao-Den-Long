@@ -1,5 +1,5 @@
-# InputState.gd — Holds current and previous input frame.
-# Handles persistence and rising-edge detection for jump/interact/pulse.
+# InputState.gd — Holds current and previous input frame (Phase 2).
+# Handles persistence and rising-edge detection for jump/interact/pulse/dash/pause.
 class_name InputState
 extends RefCounted
 
@@ -14,13 +14,16 @@ var sprint: bool = false
 var jump: bool = false
 var interact: bool = false
 var pulse: bool = false
+var dash: bool = false     # Phase 2 new
+var pause: bool = false    # Phase 2 new
 
 # Previous frame state for edge detection
 var _prev_jump: bool = false
 var _prev_interact: bool = false
 var _prev_pulse: bool = false
+var _prev_dash: bool = false
+var _prev_pause: bool = false
 
-# Returns true only on the rising edge (false->true) this tick.
 func jump_edge() -> bool:
 	return jump and not _prev_jump
 
@@ -30,13 +33,19 @@ func interact_edge() -> bool:
 func pulse_edge() -> bool:
 	return pulse and not _prev_pulse
 
-# Call at the start of each tick, before applying the new frame.
+func dash_edge() -> bool:
+	return dash and not _prev_dash
+
+func pause_edge() -> bool:
+	return pause and not _prev_pause
+
 func advance_prev() -> void:
 	_prev_jump    = jump
 	_prev_interact = interact
 	_prev_pulse   = pulse
+	_prev_dash    = dash
+	_prev_pause   = pause
 
-# Apply a parsed frame dict (only fields present update; others persist).
 func apply_frame(frame: Dictionary) -> void:
 	if frame.has("move"):
 		var m: Array = frame["move"]
@@ -51,9 +60,13 @@ func apply_frame(frame: Dictionary) -> void:
 		interact = bool(frame["interact"])
 	if frame.has("pulse"):
 		pulse = bool(frame["pulse"])
+	if frame.has("dash"):
+		dash = bool(frame["dash"])
+	if frame.has("pause"):
+		pause = bool(frame["pause"])
 
-# World-space direction from move vector and yaw. Returns a Vector2 (xz).
-# If length > 1 after rotation, normalized to 1.
+# World-space direction from move vector and yaw. Returns Vector2(x', z').
+# If length > 1, normalized to 1.
 func world_move() -> Vector2:
 	if move.is_zero_approx():
 		return Vector2.ZERO
@@ -66,3 +79,4 @@ func world_move() -> Vector2:
 	if v.length_squared() > 1.0:
 		v = v.normalized()
 	return v
+
