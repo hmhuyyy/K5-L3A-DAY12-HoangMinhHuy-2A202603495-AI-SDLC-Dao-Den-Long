@@ -157,16 +157,18 @@ Phân biệt off-by-one: bước k → `current_tick = executed_ticks + 1`; sau 
 
 **[ASSUME-APPROVED B12]** Wander = đứng yên (TICKET không cho tốc độ wander).
 
-**[ASSUME-APPROVED B13]** State transitions with hysteresis and previous_state:
+**[ASSUME-APPROVED B13]** State transitions với hysteresis và previous_state:
 - `spawning` (1 tick) → `wander`
-- `wander` → `chase` khi dist ≤ detect_m (12 m); lưu previous_state = "wander"
-- `chase` → `wander` khi dist > abandon_m (18 m); lưu previous_state = "chase"
-- `chase` → `recoil` khi gây hit; lưu previous_state = "chase"
-- Thoát `recoil`: khôi phục hysteresis theo previous_state:
+- `wander` ↔ `chase`: transitions bình thường không lưu previous_state:
+  - `wander` → `chase` khi dist ≤ detect_m (12 m)
+  - `chase` → `wander` khi dist > abandon_m (18 m)
+- `chase` → `recoil` khi gây hit: **lưu previous_state = "chase"** (trạng thái tạm thời)
+- Thoát `recoil` (60 tick): **phục hồi hysteresis từ previous_state**:
   - previous = "chase" → tiếp tục chase cho đến khi dist > 18 m
   - previous = "wander" → tiếp tục wander cho đến khi dist ≤ 12 m
-- Bất kỳ → `stunned` khi pulse trúng; lưu previous_state; `stunned` ưu tiên hơn `recoil`
-- Thoát `stunned`: giống thoát `recoil` — phục hồi hysteresis từ previous_state
+- Bất kỳ → `stunned` khi pulse trúng: **lưu previous_state** (trạng thái tạm thời); `stunned` ưu tiên hơn `recoil`
+- Thoát `stunned` (120 tick): giống thoát `recoil` — **phục hồi hysteresis từ previous_state**
+- Lưu ý: transitions bình thường `wander` ↔ `chase` không cần lưu previous_state; chỉ trạng thái tạm thời (`recoil`, `stunned`) lưu để khôi phục
 
 **[REQ]** Recoil: Shade lùi 2 m trong 60 tick (không phải player). **[ASSUME-APPROVED B16]** Hướng = ra xa player.
 
@@ -203,7 +205,9 @@ Phân biệt off-by-one: bước k → `current_tick = executed_ticks + 1`; sau 
 - Khi thắng: `+floor(time_left_s) × 2 + 50 × flames`.
 - Tổng điểm game = tổng điểm các đêm đã thắng.
 
-Trường `score_per_mote_deposited = 10` thay cho `score_per_mote` cũ để tránh nhầm lẫn.
+**Contract v1.1 canon:** `tuning.score.per_mote = 10`. **Config.gd canon:** `score_per_mote` (property).
+
+**Lưu ý Phase 1→2:** GameSim Phase 1 hiện tại cộng `score_per_mote` khi **PICKUP** event, không phải khi DEPOSIT. Alias compat `score_per_mote` bảo đảm Config load đúng; **semantics thực hiện DEPOSIT** sẽ chuyển đổi khi GameSim được viết lại (Giai đoạn 2).
 
 ### P2.10. Multi-night và Campaign [REQ + ASSUME]
 

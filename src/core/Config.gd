@@ -178,6 +178,7 @@ const _TYPE_SPECS: Dictionary = {
 # ── Helper: validate and convert value to expected type ───────────────────
 static func _type_name(v: Variant) -> String:
 	match typeof(v):
+		TYPE_NIL: return "null"
 		TYPE_INT: return "int"
 		TYPE_FLOAT: return "float"
 		TYPE_BOOL: return "bool"
@@ -192,21 +193,32 @@ static func _coerce_value(value: Variant, expected_type: String, field_name: Str
 			# float accepts JSON int or float
 			if value is int or value is float:
 				return float(value)
-			push_error("Config: tuning['%s'] type error: expected float, got %s" % [
+			push_error("Config: field '%s' type error: expected float, got %s" % [
 				field_name, _type_name(value)])
 			return null
 		"int":
-			# int requires integer
+			# int: accept int directly, or float if it's an exact integer (JSON parse gives floats)
 			if value is int:
 				return int(value)
-			push_error("Config: tuning['%s'] type error: expected int, got %s" % [
+			if value is float:
+				# Check for special float values and fractional parts
+				if is_nan(value) or is_inf(value):
+					push_error("Config: field '%s' type error: float is NaN or Inf" % field_name)
+					return null
+				if value != floor(value):
+					push_error("Config: field '%s' type error: expected int, got float %f (not whole)" % [
+						field_name, value])
+					return null
+				# Accept whole-valued float and convert to int
+				return int(value)
+			push_error("Config: field '%s' type error: expected int, got %s" % [
 				field_name, _type_name(value)])
 			return null
 		"bool":
 			# bool requires boolean
 			if value is bool:
 				return bool(value)
-			push_error("Config: tuning['%s'] type error: expected bool, got %s" % [
+			push_error("Config: field '%s' type error: expected bool, got %s" % [
 				field_name, _type_name(value)])
 			return null
 	push_error("Config: _coerce_value unknown type '%s'" % expected_type)

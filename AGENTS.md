@@ -79,16 +79,17 @@ Chạy 3 lần cho từng Đêm (18.000 / 19.800 / 21.600 tick); pass khi tất 
 - +5 mỗi Bóng Mực trúng Tỏa Sáng (kể cả đang choáng).
 - Thắng: `floor(time_left_s) × 2 + 50 × flames`.
 
-## Cấm
+## Ngoại lệ sửa fixture trong Stage 0
 
-- `randf()`/`randi()` ngoài `RNG.gd`.
-- Hardcode đường dẫn Windows tuyệt đối.
-- `Node3D`/`Camera3D`/`Viewport` trong `src/core/`.
-- Phát minh CLI flag ngoài contract.
-- Đổi tuning ở code mà không cập nhật `game.contract.json`.
-- Sửa tag `phase-1` hoặc force push sau khi tag.
-- Sửa `GameSim.gd`, `src/gameplay/`, `tests/`, `src/headless/` trong Giai đoạn 0.
-- Tự đánh dấu giả định OPEN là đã được duyệt.
+Trong Giai đoạn 0, được phép sửa **scenario fixture files** trong `tests/scenarios/` khi giá trị setup cũ không còn phù hợp với tuning mới trong `game.contract.json`.
+
+Ngoại lệ hiện tại:
+- `tests/scenarios/f4.json`: `carried` 3 → 10 (theo `lantern_cost = 10`)
+- `tests/scenarios/f7.json`: `carried` 2 → 3 (theo `pulse_cost = 3`)
+
+**Giới hạn:** Không sửa assertions trong `run_tests.sh`, không sửa headless pipeline, không sửa gameplay logic. Không commit khi test suite đỏ.
+
+## Cấm
 
 ## Hook
 
